@@ -1,0 +1,51 @@
+/**:
+    ros__parameters:
+        feature_extract_enable: false
+        point_filter_num: 4
+        max_iteration: 3
+        filter_size_surf: 0.5
+        filter_size_map: 0.5
+        cube_side_length: 1000.0
+        runtime_pos_log_enable: false
+        map_file_path: "./test.pcd"
+
+        common:
+            lid_topic:  "/velodyne_points"
+            # [修改] 对齐 M2DGR 的 IMU 话题
+            imu_topic:  "/handsfree/imu"       
+            time_sync_en: false         
+            time_offset_lidar_to_imu: 0.0 
+
+        preprocess:
+            lidar_type: 2                
+            scan_line: 32
+            scan_rate: 10                
+            # M2DGR / gate_03_ros2 的 PointCloud2 time 字段是秒级相对时间，
+            # 范围约 -0.1~0.0s，不能按微秒解释。
+            timestamp_unit: 0            
+            # [修改] 缩小盲区，M2DGR 数据集不需要滤除 2.0 米那么夸张，0.5 米足够避开狗身
+            blind: 0.5
+
+        mapping:
+            acc_cov: 0.1
+            gyr_cov: 0.1
+            b_acc_cov: 0.0001
+            b_gyr_cov: 0.0001
+            fov_degree:    360.0
+            det_range:     100.0
+            extrinsic_est_en:  false      
+            # [修改] 填入 M2DGR 官方 Velodyne 32 到 Handsfree IMU 的真实平移外参
+            extrinsic_T: [ 0.27255, -0.00053, 0.17954]
+            # [保持] 旋转外参维持原样的单位阵即可
+            extrinsic_R: [ 1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0 ]
+
+        publish:
+            path_en:  false
+            scan_publish_en:  true       # false: close all the point cloud output
+            dense_publish_en: true       # false: low down the points number in a global-frame point clouds scan.
+            scan_bodyframe_pub_en: true  # true: output the point cloud scans in IMU-body-frame
+
+        pcd_save:
+            pcd_save_en: true
+            interval: -1                 # how many LiDAR frames saved in each pcd file; 
+                                        # -1 : all frames will be saved in ONE pcd file, may lead to memory crash when having too much frames.

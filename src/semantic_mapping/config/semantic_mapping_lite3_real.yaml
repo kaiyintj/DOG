@@ -1,0 +1,74 @@
+clip_node:
+  ros__parameters:
+    model_name: "ViT-B-32"
+    pretrained: "openai"
+    device: "cpu"
+    vocab: ["road", "building", "tree", "person", "car", "unknown background"]
+    grid_rows: 3
+    grid_cols: 4
+    inference_interval_sec: 0.2
+    image_topic: "/camera/color/image_raw"
+    image_is_compressed: false
+    image_encoding: "rgb8"
+    clip_logits_topic: "/clip_logits"
+    clip_features_topic: "/clip_features"
+    text_query_topic: "/text_query"
+    query_feature_topic: "/query_feature"
+
+ga_bsvm_node:
+  ros__parameters:
+    pointcloud_topic: "/livox/lidar"
+    pointcloud_type: "livox_custom"
+    image_topic: "/camera/color/image_raw"
+    image_is_compressed: false
+    image_encoding: "rgb8"
+    imu_topic: "/livox/imu"
+    clip_logits_topic: "/clip_logits"
+    clip_features_topic: "/clip_features"
+    text_query_topic: "/text_query"
+    query_feature_topic: "/query_feature"
+    semantic_cloud_topic: "/semantic_cloud"
+    uncertainty_cloud_topic: "/uncertainty_cloud"
+    entropy_topic: "/voxel_entropy_data"
+    goal_pose_topic: "/goal_pose"
+    map_topic: "/map"
+    semantic_cost_map_topic: "/semantic_cost_map"
+    odom_frame: "odom"
+    base_frame: "base_link"
+    grid_rows: 3
+    grid_cols: 4
+    num_classes: 6
+    feat_dim: 512
+    vocab: ["road", "building", "tree", "person", "car", "unknown background"]
+    voxel_size: 0.1
+    semantic_costs: [0, 100, 100, 100, 100, -1]
+    query_min_weight_sum: 2.0
+    query_min_class_prob: 0.25
+    query_feature_weight: 0.7
+    query_class_weight: 0.3
+    query_allow_feature_fallback: false
+    query_approach_radius_m: 1.5
+    cost_map_size_m: 50.0
+    sync_queue_size: 10
+    sync_slop: 0.2
+    process_every_n_frames: 5
+    entropy_publish_every_n_processed: 2
+    cloud_publish_every_n_processed: 10
+    camera_k: [554.25, 0.0, 320.5, 0.0, 554.25, 240.5, 0.0, 0.0, 1.0]
+    lidar_to_camera_translation: [0.2, 0.0, -0.03]
+    lidar_to_camera_quaternion: [-0.5, 0.5, -0.5, 0.5]
+
+active_perception_node:
+  ros__parameters:
+    lookahead_dist: 2.0
+    search_radius: 0.5
+    h_max: 1.791759469228055
+    min_speed_ratio: 0.3
+    plan_topic: "/plan"
+    entropy_topic: "/voxel_entropy_data"
+    nav_cmd_vel_topic: "/cmd_vel_nav"
+    cmd_vel_topic: "/cmd_vel"
+    path_entropy_topic: "/path_entropy"
+    perception_mode_topic: "/perception_mode"
+    odom_frame: "odom"
+    base_frame: "base_link"
