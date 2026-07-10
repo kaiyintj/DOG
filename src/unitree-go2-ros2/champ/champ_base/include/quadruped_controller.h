@@ -62,6 +62,7 @@ class QuadrupedController: public rclcpp::Node
 
     rclcpp::TimerBase::SharedPtr loop_timer_;
     rclcpp::Clock clock_;
+    rclcpp::Time last_cmd_vel_time_;
     
     champ::Velocities req_vel_;
     champ::Pose req_pose_;
@@ -79,6 +80,8 @@ class QuadrupedController: public rclcpp::Node
     bool publish_joint_states_;
     bool publish_joint_control_;
     bool in_gazebo_;
+    bool has_cmd_vel_ = false;
+    double cmd_vel_timeout_ = 0.5;
 
     void controlLoop_();
     

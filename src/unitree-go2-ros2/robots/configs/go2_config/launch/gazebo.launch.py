@@ -55,6 +55,11 @@ def generate_launch_description():
         default_value=ros_control_config,
         description="Ros control config path",
     )
+    declare_cmd_vel_topic = DeclareLaunchArgument(
+        "cmd_vel_topic",
+        default_value="/cmd_vel_champ",
+        description="Final velocity topic for the simulated Go2 gait controller",
+    )
     declare_gazebo_world = DeclareLaunchArgument(
         "world", default_value=default_world_path, description="Gazebo world name"
     )
@@ -89,6 +94,7 @@ def generate_launch_description():
             "lite": LaunchConfiguration("lite"),
             "rviz": LaunchConfiguration("rviz"),
             "joint_controller_topic": "joint_group_effort_controller/joint_trajectory",
+            "cmd_vel_topic": LaunchConfiguration("cmd_vel_topic"),
             "hardware_connected": "false",
             "publish_foot_contacts": "false",
             "close_loop_odom": "true",
@@ -124,6 +130,7 @@ def generate_launch_description():
             declare_robot_name,
             declare_lite,
             declare_ros_control_file,
+            declare_cmd_vel_topic,
             declare_gazebo_world,
             declare_gui,
             declare_world_init_x,

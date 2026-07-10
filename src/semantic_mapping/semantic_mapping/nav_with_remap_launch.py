@@ -5,7 +5,6 @@ from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration
-from launch_ros.actions import SetRemap
 
 
 def generate_launch_description():
@@ -37,7 +36,6 @@ def generate_launch_description():
             default_value=default_params_file,
             description='Full path to the Nav2 parameters file.',
         ),
-        SetRemap(src='/cmd_vel', dst='/cmd_vel_nav'),
         IncludeLaunchDescription(
             PythonLaunchDescriptionSource(nav2_launch_file),
             launch_arguments={

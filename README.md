@@ -22,7 +22,7 @@ source install/setup.bash
 
 ```bash
 ros2 launch go2_config gazebo.launch.py \
-  world:=~/ws/src/unitree-go2-ros2/unitree_go2_description/worlds/outdoor_terrain.world \
+  world:=~/ws/src/unitree-go2-ros2/unitree_go2_description/worlds/outdoor_car_benchmark.world \
   gui:=true rviz:=false use_sim_time:=true
 ```
 
@@ -57,14 +57,15 @@ ros2 run semantic_mapping active_perception_node --ros-args \
 
 ## Language Query
 
-Listen first, then publish the query because `/goal_pose` is not latched:
+Listen for both the detected object and the safe approach pose before querying:
 
 ```bash
+ros2 topic echo /query_target_pose
 ros2 topic echo /goal_pose --once
 ```
 
 ```bash
-ros2 topic pub --once /text_query std_msgs/msg/String "{data: 'person'}"
+ros2 topic pub --once /text_query std_msgs/msg/String "{data: 'car'}"
 ```
 
 Check navigation output:
@@ -73,4 +74,17 @@ Check navigation output:
 ros2 topic echo /plan --once
 ros2 topic echo /cmd_vel_nav --once
 ros2 topic echo /cmd_vel --once
+ros2 topic echo /cmd_vel_champ --once
 ```
+
+The Gazebo command chain has one publisher at every stage:
+
+```text
+Nav2 -> /cmd_vel_nav -> velocity_smoother -> /cmd_vel
+     -> active_perception -> /cmd_vel_champ -> CHAMP
+```
+
+The Go2 controller stops automatically when final velocity commands are stale
+for 0.5 seconds. The Lite3 hardware preset keeps a separate robot command
+interface; real camera calibration, LiDAR-to-camera extrinsics, footprint,
+velocity limits and the Deep Robotics SDK bridge must be verified on hardware.

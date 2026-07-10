@@ -106,6 +106,12 @@ def generate_launch_description():
         description="Joint controller topic",
     )
 
+    declare_cmd_vel_topic = DeclareLaunchArgument(
+        "cmd_vel_topic",
+        default_value="/cmd_vel",
+        description="Final velocity topic consumed by the quadruped controller",
+    )
+
     declare_hardware_connected = DeclareLaunchArgument(
         "joint_hardware_connected",
         default_value="false",
@@ -170,7 +176,9 @@ def generate_launch_description():
             LaunchConfiguration('links_map_path'),
             LaunchConfiguration('gait_config_path'),
         ],
-        remappings=[("/cmd_vel/smooth", "/cmd_vel")],
+        remappings=[
+            ("/cmd_vel/smooth", LaunchConfiguration("cmd_vel_topic")),
+        ],
     )
 
     state_estimator_node = Node(
@@ -249,6 +257,7 @@ def generate_launch_description():
             declare_lite,
             declare_gazebo,
             declare_joint_controller_topic,
+            declare_cmd_vel_topic,
             declare_hardware_connected,
             declare_publish_joint_control,
             declare_publish_joint_states,
