@@ -1,6 +1,7 @@
 # semantic_mapping
 
-ROS 2 nodes for CLIP-based semantic mapping, GA-BSVM voxel fusion, semantic costmap publishing, and active perception speed modulation.
+ROS 2 nodes for CLIP/SegFormer perception experiments, GA-BSVM voxel fusion,
+semantic costmap publishing, and active perception speed modulation.
 
 ## Mapping and navigation method
 
@@ -34,7 +35,7 @@ separated for object-like queries.
 Install these Python packages in the ROS environment used to run the nodes:
 
 ```bash
-pip install numpy scipy torch open_clip_torch pillow
+pip install numpy scipy torch open_clip_torch pillow transformers tokenizers
 ```
 
 The ROS package dependencies are declared in `package.xml`. The three runtime parameter presets are:
@@ -46,6 +47,30 @@ The ROS package dependencies are declared in `package.xml`. The three runtime pa
 The Lite3 preset disables feature-only query fallback. Its camera calibration,
 LiDAR-to-camera transform and command bridge still need to be replaced with
 measured values before real-robot trials.
+
+## SegFormer side-by-side trial
+
+`segformer_node` is an experimental perception branch. It does not replace the
+existing CLIP topics or change GA-BSVM fusion. It preserves the source image
+header and publishes a six-class mask, per-pixel confidence and RGB preview:
+
+- `/segformer/class_mask` (`mono8`, values `0..5`)
+- `/segformer/confidence` (`32FC1`)
+- `/segformer/color_mask` (`rgb8`)
+
+Run it on the M2DGR bag configuration with:
+
+```bash
+ros2 run semantic_mapping segformer_node --ros-args \
+  --params-file config/semantic_mapping_m2dgr.yaml
+```
+
+The ADE20K model maps road/sidewalk/path to `road`, structural labels to
+`building`, vegetation labels to `tree`, person to `person`, and road vehicles
+to `car`. All other labels and predictions below the confidence threshold are
+mapped to `unknown background`. The Lite3 preset requests CUDA FP16; final
+deployment should use an ONNX/TensorRT engine built for the robot's JetPack and
+TensorRT versions.
 
 ## Gazebo semantic benchmark
 

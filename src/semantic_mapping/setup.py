@@ -29,9 +29,10 @@ setup(
     },
     entry_points={
         'console_scripts': [
-        	'clip_node = semantic_mapping.clip_node:main',
-        	'ga_bsvm_node = semantic_mapping.ga_bsvm_node:main',
-        	'active_perception_node = semantic_mapping.active_perception_node:main',
+            'clip_node = semantic_mapping.clip_node:main',
+            'segformer_node = semantic_mapping.segformer_node:main',
+            'ga_bsvm_node = semantic_mapping.ga_bsvm_node:main',
+            'active_perception_node = semantic_mapping.active_perception_node:main',
             'clip_query = semantic_mapping.clip_query:main',
         ],
     },

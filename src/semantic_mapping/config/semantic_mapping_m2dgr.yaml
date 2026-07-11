@@ -17,6 +17,21 @@ clip_node:
     text_query_topic: "/text_query"
     query_feature_topic: "/query_feature"
 
+segformer_node:
+  ros__parameters:
+    model_id: "nvidia/segformer-b0-finetuned-ade-512-512"
+    device: "auto"
+    use_fp16: true
+    inference_interval_sec: 0.5
+    confidence_threshold: 0.45
+    image_topic: "/camera/color/image_raw/compressed"
+    image_is_compressed: true
+    image_encoding: "rgb8"
+    class_mask_topic: "/segformer/class_mask"
+    confidence_topic: "/segformer/confidence"
+    color_mask_topic: "/segformer/color_mask"
+    log_every_n: 10
+
 ga_bsvm_node:
   ros__parameters:
     pointcloud_topic: "/velodyne_points"
