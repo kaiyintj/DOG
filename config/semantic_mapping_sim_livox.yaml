@@ -1,0 +1,161 @@
+clip_node:
+  ros__parameters:
+    model_name: "ViT-B-32"
+    pretrained: "openai"
+    device: "cpu"
+    logit_scale: 0.0
+    text_templates: ["a photo of a {}.", "a photo of the {}.", "a {} in the scene."]
+    vocab: ["road", "building", "tree", "person", "car", "truck", "bus", "bicycle", "motorcycle", "chair", "bench", "unknown background"]
+    grid_rows: 4
+    grid_cols: 6
+    inference_interval_sec: 0.5
+    image_topic: "/d435i/image_raw"
+    image_is_compressed: false
+    image_encoding: "rgb8"
+    clip_logits_topic: "/clip_logits"
+    clip_features_topic: "/clip_features"
+    text_query_topic: "/text_query"
+    query_feature_topic: "/query_feature"
+
+segformer_node:
+  ros__parameters:
+    model_id: "nvidia/segformer-b0-finetuned-cityscapes-1024-1024"
+    device: "auto"
+    use_fp16: true
+    inference_interval_sec: 0.5
+    confidence_threshold: 0.45
+    image_topic: "/d435i/image_raw"
+    image_is_compressed: false
+    image_encoding: "rgb8"
+    class_mask_topic: "/segformer/class_mask"
+    raw_class_mask_topic: "/segformer/raw_class_mask"
+    confidence_topic: "/segformer/confidence"
+    color_mask_topic: "/segformer/color_mask"
+    source_image_topic: "/segformer/source_image"
+    log_every_n: 10
+    debug_log_raw_predictions: true
+    debug_raw_top_k: 8
+    debug_watch_labels: ["car", "truck", "bus", "road", "building"]
+    # Central scene ROI; adjust if a test vehicle is outside this rectangle.
+    debug_roi_xywh_normalized: [0.15, 0.15, 0.75, 0.55]
+
+ga_bsvm_node:
+  ros__parameters:
+    pointcloud_topic: "/livox/lidar"
+    pointcloud_type: "livox_custom"
+    pointcloud_frame: "mid360_link"
+    tf_buffer_cache_sec: 30.0
+    tf_lookup_timeout_sec: 0.2
+    tf_retry_queue_size: 8
+    tf_retry_period_sec: 0.05
+    tf_retry_max_age_sec: 3.0
+    image_topic: "/d435i/image_raw"
+    image_is_compressed: false
+    image_encoding: "rgb8"
+    imu_topic: "/imu/data"
+    semantic_backend: "clip"
+    clip_logits_topic: "/clip_logits"
+    clip_features_topic: "/clip_features"
+    segformer_class_mask_topic: "/segformer/class_mask"
+    segformer_confidence_topic: "/segformer/confidence"
+    segformer_source_image_topic: "/segformer/source_image"
+    segformer_unknown_probability_floor: 0.5
+    text_query_topic: "/text_query"
+    query_feature_topic: "/query_feature"
+    semantic_cloud_topic: "/semantic_cloud"
+    uncertainty_cloud_topic: "/uncertainty_cloud"
+    entropy_topic: "/voxel_entropy_data"
+    goal_pose_topic: "/goal_pose"
+    query_target_pose_topic: "/query_target_pose"
+    map_topic: "/map"
+    semantic_cost_map_topic: "/semantic_cost_map"
+    odom_frame: "odom"
+    base_frame: "base_link"
+    grid_rows: 4
+    grid_cols: 6
+    num_classes: 12
+    feat_dim: 512
+    vocab: ["road", "building", "tree", "person", "car", "truck", "bus", "bicycle", "motorcycle", "chair", "bench", "unknown background"]
+    voxel_size: 0.1
+    evidence_prior: 1.0
+    evidence_strength: 1.0
+    evidence_decay: 0.995
+    max_frame_evidence: 3.0
+    max_total_evidence: 200.0
+    uncertainty_entropy_weight: 0.7
+    semantic_costs: [0, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, -1]
+    query_min_weight_sum: 2.0
+    query_min_class_prob: 0.25
+    query_require_class_argmax: true
+    query_min_similarity: 0.18
+    query_feature_weight: 0.7
+    query_class_weight: 0.3
+    query_color_weight: 0.35
+    query_min_color_score: 0.2
+    query_min_color_support_ratio: 0.3
+    query_allow_feature_fallback: false
+    query_approach_radius_m: 2.6
+    query_approach_distance_m: 2.0
+    query_approach_min_distance_m: 1.2
+    query_clearance_radius_m: 0.6
+    query_require_safe_approach: true
+    query_prefer_robot_side: true
+    query_require_robot_side: false
+    query_prefer_direct_path: true
+    query_same_side_min_cosine: 0.0
+    query_path_clearance_radius_m: 0.65
+    query_robot_distance_weight: 0.15
+    query_require_robot_pose_for_approach: true
+    query_cluster_radius_m: 0.45
+    query_cluster_min_voxels: 3
+    query_cluster_min_evidence: 3.0
+    query_cluster_support_weight: 0.08
+    query_distance_weight: 0.01
+    query_max_candidates: 5000
+    query_class_max_extent_m: [100.0, 100.0, 100.0, 1.5, 5.0, 9.0, 14.0, 3.0, 3.5, 2.0, 4.0, 100.0]
+    cost_map_size_m: 50.0
+    costmap_min_confidence: 0.15
+    costmap_robot_clearance_m: 0.4
+    sync_queue_size: 10
+    sync_slop: 0.2
+    process_every_n_frames: 5
+    segformer_process_every_n_frames: 1
+    entropy_publish_every_n_processed: 2
+    cloud_publish_every_n_processed: 10
+    segformer_cloud_publish_every_n_processed: 1
+    imu_window_sec: 0.15
+    motion_angular_scale: 2.0
+    motion_accel_scale: 3.0
+    motion_min_reliability: 0.2
+    imu_gravity: 9.81
+    density_scale: 8.0
+    range_scale_m: 20.0
+    view_edge_penalty: 0.4
+    semantic_confidence_floor: 0.15
+    camera_k: [457.02, 0.0, 320.0, 0.0, 457.02, 240.0, 0.0, 0.0, 1.0]
+    lidar_to_camera_translation: [0.0, 0.06, -0.20]
+    lidar_to_camera_quaternion: [0.5, -0.5, 0.5, 0.5]
+
+active_perception_node:
+  ros__parameters:
+    lookahead_dist: 2.0
+    search_radius: 0.5
+    h_max: 2.4849066497880004
+    min_speed_ratio: 0.3
+    unknown_speed_ratio: 0.65
+    linear_deadband: 0.01
+    angular_deadband: 0.03
+    uncertainty_ema_gain: 0.2
+    max_scale_step: 0.08
+    preserve_command_curvature: true
+    scale_angular_velocity: true
+    angular_min_speed_ratio: 0.3
+    plan_topic: "/plan"
+    entropy_topic: "/voxel_entropy_data"
+    nav_cmd_vel_topic: "/cmd_vel"
+    cmd_vel_topic: "/cmd_vel_champ"
+    path_entropy_topic: "/path_entropy"
+    perception_mode_topic: "/perception_mode"
+    speed_scale_topic: "/semantic_speed_scale"
+    odom_frame: "odom"
+    base_frame: "base_link"

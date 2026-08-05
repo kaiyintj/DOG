@@ -1,3 +1,5 @@
+# Baseline rolling-costmap navigation for controller and locomotion tests.
+# It does not wait for the semantic mapper to publish /semantic_cost_map.
 amcl:
   ros__parameters:
     use_sim_time: True
@@ -124,10 +126,8 @@ controller_server:
     # Progress checker parameters
     progress_checker:
       plugin: "nav2_controller::SimpleProgressChecker"
-      # Active perception may deliberately slow to 30%; do not enter recovery
-      # merely because a safe low-speed maneuver moved less than 0.5 m.
-      required_movement_radius: 0.15
-      movement_time_allowance: 20.0
+      required_movement_radius: 0.5
+      movement_time_allowance: 10.0
     # Goal checker parameters
     #precise_goal_checker:
     #  plugin: "nav2_controller::SimpleGoalChecker"
@@ -145,11 +145,11 @@ controller_server:
       debug_trajectory_details: True
       min_vel_x: 0.0
       min_vel_y: 0.0
-      max_vel_x: 0.3
+      max_vel_x: 0.5
       max_vel_y: 0.0
-      max_vel_theta: 0.5
+      max_vel_theta: 1.0
       min_speed_xy: 0.0
-      max_speed_xy: 0.3
+      max_speed_xy: 0.5
       min_speed_theta: 0.0
       # Add high threshold velocity for turtlebot 3 issue.
       # https://github.com/ROBOTIS-GIT/turtlebot3_simulations/issues/75
@@ -162,16 +162,16 @@ controller_server:
       vx_samples: 20
       vy_samples: 5
       vtheta_samples: 20
-      sim_time: 2.0
+      sim_time: 1.7
       linear_granularity: 0.05
       angular_granularity: 0.025
       transform_tolerance: 0.2
       xy_goal_tolerance: 0.25
-      trans_stopped_velocity: 0.05
+      trans_stopped_velocity: 0.25
       short_circuit_trajectory_evaluation: True
       stateful: True
       critics: ["RotateToGoal", "Oscillation", "BaseObstacle", "GoalAlign", "PathAlign", "PathDist", "GoalDist"]
-      BaseObstacle.scale: 0.2
+      BaseObstacle.scale: 0.02
       PathAlign.scale: 32.0
       PathAlign.forward_point_distance: 0.1
       GoalAlign.scale: 24.0
@@ -194,15 +194,12 @@ local_costmap:
       width: 6
       height: 6
       resolution: 0.05
-      # Conservative Go2 body/leg sweep envelope.  A 0.22 m circle only
-      # covered the trunk and allowed the legs to scrape parked vehicles.
-      footprint: "[[0.35, 0.22], [0.35, -0.22], [-0.35, -0.22], [-0.35, 0.22]]"
-      footprint_padding: 0.05
+      robot_radius: 0.22
       plugins: ["voxel_layer", "inflation_layer"]
       inflation_layer:
         plugin: "nav2_costmap_2d::InflationLayer"
-        cost_scaling_factor: 2.0
-        inflation_radius: 0.85
+        cost_scaling_factor: 3.0
+        inflation_radius: 0.55
       voxel_layer:
         plugin: "nav2_costmap_2d::VoxelLayer"
         enabled: True
@@ -220,9 +217,9 @@ local_costmap:
           min_obstacle_height: 0.10
           clearing: True
           marking: True
-          raytrace_max_range: 5.0
+          raytrace_max_range: 3.0
           raytrace_min_range: 0.0
-          obstacle_max_range: 4.0
+          obstacle_max_range: 2.5
           obstacle_min_range: 0.0
       static_layer:
         plugin: "nav2_costmap_2d::StaticLayer"
@@ -237,14 +234,13 @@ global_costmap:
       global_frame: odom
       robot_base_frame: base_link
       use_sim_time: True
-      footprint: "[[0.35, 0.22], [0.35, -0.22], [-0.35, -0.22], [-0.35, 0.22]]"
-      footprint_padding: 0.05
+      robot_radius: 0.22
       resolution: 0.05
       rolling_window: True
       width: 50
       height: 50
       track_unknown_space: true
-      plugins: ["obstacle_layer", "semantic_layer", "inflation_layer"]
+      plugins: ["obstacle_layer", "inflation_layer"]
       obstacle_layer:
         plugin: "nav2_costmap_2d::ObstacleLayer"
         enabled: True
@@ -256,9 +252,9 @@ global_costmap:
           min_obstacle_height: 0.10
           clearing: True
           marking: True
-          raytrace_max_range: 5.0
+          raytrace_max_range: 3.0
           raytrace_min_range: 0.0
-          obstacle_max_range: 4.0
+          obstacle_max_range: 2.5
           obstacle_min_range: 0.0
       semantic_layer:
         plugin: "nav2_costmap_2d::StaticLayer"
@@ -270,8 +266,8 @@ global_costmap:
         track_unknown_space: true
       inflation_layer:
         plugin: "nav2_costmap_2d::InflationLayer"
-        cost_scaling_factor: 2.0
-        inflation_radius: 0.85
+        cost_scaling_factor: 3.0
+        inflation_radius: 0.55
       always_send_full_costmap: True
 
 map_server:
@@ -291,7 +287,7 @@ map_saver:
 
 planner_server:
   ros__parameters:
-    expected_planner_frequency: 10.0
+    expected_planner_frequency: 2.0
     use_sim_time: True
     planner_plugins: ["GridBased"]
     GridBased:
@@ -331,9 +327,9 @@ behavior_server:
     transform_tolerance: 0.1
     use_sim_time: true
     simulate_ahead_time: 2.0
-    max_rotational_vel: 0.5
-    min_rotational_vel: 0.1
-    rotational_acc_lim: 1.0
+    max_rotational_vel: 1.0
+    min_rotational_vel: 0.4
+    rotational_acc_lim: 3.2
 
 robot_state_publisher:
   ros__parameters:
@@ -356,8 +352,8 @@ velocity_smoother:
     smoothing_frequency: 20.0
     scale_velocities: False
     feedback: "OPEN_LOOP"
-    max_velocity: [0.3, 0.0, 0.5]
-    min_velocity: [-0.3, 0.0, -0.5]
+    max_velocity: [0.5, 0.0, 1.0]
+    min_velocity: [-0.5, 0.0, -1.0]
     max_accel: [2.5, 0.0, 3.2]
     max_decel: [-2.5, 0.0, -3.2]
     odom_topic: "odom"

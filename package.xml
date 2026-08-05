@@ -3,14 +3,24 @@
 <package format="3">
   <name>semantic_mapping</name>
   <version>0.0.0</version>
-  <description>TODO: Package description</description>
+  <description>Semantic mapping and active perception nodes for ROS 2 navigation.</description>
   <maintainer email="yk@todo.todo">yk</maintainer>
-  <license>TODO: License declaration</license>
+  <license>Apache-2.0</license>
 
   <depend>rclpy</depend>
   <depend>sensor_msgs</depend>
   <depend>std_msgs</depend>
   <depend>cv_bridge</depend>
+  <depend>geometry_msgs</depend>
+  <depend>nav_msgs</depend>
+  <depend>nav2_msgs</depend>
+  <depend>action_msgs</depend>
+  <depend>tf2_ros</depend>
+  <depend>message_filters</depend>
+  <depend>sensor_msgs_py</depend>
+  <depend>livox_ros_driver2</depend>
+  <depend>launch</depend>
+  <depend>launch_ros</depend>
 
   <test_depend>ament_copyright</test_depend>
   <test_depend>ament_flake8</test_depend>
