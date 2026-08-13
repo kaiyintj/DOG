@@ -1,8 +1,13 @@
 import numpy as np
 from collections import deque
+from builtin_interfaces.msg import Time as TimeMsg
 
-from semantic_mapping.ga_bsvm_node import GABsvmNode
-from semantic_mapping.voxel_map import VoxelMap
+from semantic_mapping.runtime.ga_bsvm_node import (
+    GABsvmNode,
+    resolve_semantic_class_indices,
+    scale_camera_matrix,
+)
+from semantic_mapping.runtime.voxel_map import VoxelMap
 
 
 class FakeApproachMap:
@@ -34,6 +39,14 @@ class FakeApproachMap:
         return tuple(np.floor(np.asarray(position) / self.voxel_size).astype(int))
 
 
+class CapturingPublisher:
+    def __init__(self):
+        self.messages = []
+
+    def publish(self, message):
+        self.messages.append(message)
+
+
 def make_approach_node(robot_position):
     node = object.__new__(GABsvmNode)
     node.voxel_map = FakeApproachMap()
@@ -51,6 +64,7 @@ def make_approach_node(robot_position):
     node.query_same_side_min_cosine = 0.0
     node.query_require_robot_pose_for_approach = True
     node.semantic_cost_dict = {0: 0, 1: 100, 2: -1}
+    node.road_class_idx = 0
     node.get_robot_position = lambda: robot_position
     node.get_logger = lambda: type(
         'Logger',
@@ -72,6 +86,216 @@ def make_candidate(index, x, y, score, evidence=2.0):
         'score': score,
         'evidence': evidence,
     }
+
+
+def make_costmap_node(robot_position):
+    node = object.__new__(GABsvmNode)
+    node.voxel_map = VoxelMap(
+        voxel_size=1.0,
+        K=2,
+        evidence_decay=1.0,
+        max_frame_evidence=1.0,
+    )
+    node.cost_map_size_m = 10.0
+    node.cost_map_origin_x = -5.0
+    node.cost_map_origin_y = -5.0
+    node.costmap_min_confidence = 0.0
+    node.costmap_robot_clearance_m = 0.1
+    node.costmap_min_height_m = -0.6
+    node.costmap_max_height_m = 1.0
+    node.semantic_cost_dict = {0: 0, 1: 100}
+    node.current_goal_key = None
+    node.odom_frame = 'odom'
+    node.costmap_tf_warned = False
+    node.semantic_cost_pub = CapturingPublisher()
+    node.map_pub = None
+    node.get_robot_position = lambda: robot_position
+    node.get_clock = lambda: type(
+        'Clock',
+        (),
+        {'now': lambda self: type(
+            'Now', (), {'to_msg': lambda self: TimeMsg()})()},
+    )()
+    warnings = []
+    node.get_logger = lambda: type(
+        'Logger',
+        (),
+        {
+            'info': lambda self, message: None,
+            'warn': lambda self, message: warnings.append(message),
+        },
+    )()
+    return node, warnings
+
+
+def test_camera_matrix_scales_to_runtime_image_resolution():
+    camera_matrix = np.array([
+        [600.0, 0.0, 320.0],
+        [0.0, 620.0, 240.0],
+        [0.0, 0.0, 1.0],
+    ])
+
+    scaled = scale_camera_matrix(camera_matrix, 640, 480, 424, 240)
+
+    np.testing.assert_allclose(
+        scaled,
+        [
+            [397.5, 0.0, 212.0],
+            [0.0, 310.0, 120.0],
+            [0.0, 0.0, 1.0],
+        ],
+    )
+
+
+def make_motion_node(samples=()):
+    node = object.__new__(GABsvmNode)
+    node.imu_buffer = deque(samples, maxlen=1000)
+    node.imu_window_sec = 0.15
+    node.motion_angular_scale = 2.0
+    node.motion_accel_scale = 3.0
+    node.motion_min_reliability = 0.2
+    node.motion_missing_reliability = 0.2
+    node.imu_gravity = 9.81
+    node.imu_missing_warned = False
+    node.imu_match_count = 0
+    node.imu_miss_count = 0
+    messages = {'info': [], 'warn': []}
+    node.get_logger = lambda: type(
+        'Logger',
+        (),
+        {
+            'info': lambda self, message: messages['info'].append(message),
+            'warn': lambda self, message: messages['warn'].append(message),
+        },
+    )()
+    return node, messages
+
+
+def test_missing_imu_motion_reliability_fails_closed():
+    node, messages = make_motion_node()
+    stamp = TimeMsg(sec=10, nanosec=0)
+
+    reliability, angular_rms, acceleration_deviation = (
+        node.compute_motion_reliability(stamp))
+
+    assert reliability == 0.2
+    assert angular_rms == 0.0
+    assert acceleration_deviation == 0.0
+    assert node.imu_miss_count == 1
+    assert len(messages['warn']) == 1
+
+
+def test_unaligned_imu_samples_are_not_treated_as_fully_reliable():
+    node, _ = make_motion_node([(1_000_000_000, 0.0, 9.81)])
+
+    reliability, _, _ = node.compute_motion_reliability(
+        TimeMsg(sec=10, nanosec=0))
+
+    assert reliability == 0.2
+    assert node.imu_match_count == 0
+
+
+def test_semantic_class_indices_are_resolved_from_reordered_vocab():
+    vocab = ['car', 'unknown background', 'road', 'electric bicycle', 'person']
+
+    assert resolve_semantic_class_indices(vocab, ('road',)) == {2}
+    assert resolve_semantic_class_indices(
+        vocab,
+        ('person', 'car', 'electric_bicycle'),
+    ) == {0, 3, 4}
+
+
+def test_semantic_costmap_filters_height_relative_to_robot_base():
+    node, _ = make_costmap_node(np.array([0.0, 0.0, 1.0]))
+    points = np.array([
+        [2.1, 0.1, 0.1],   # obstacle center z=0.5, relative height=-0.5
+        [3.1, 0.1, 2.1],   # obstacle center z=2.5, relative height=1.5
+    ], dtype=np.float32)
+    obstacle_logits = np.array([[0.0, 6.0], [0.0, 6.0]], dtype=np.float32)
+    node.voxel_map.update(points, np.ones(2), obstacle_logits)
+
+    assert node.publish_semantic_costmap() is True
+    assert len(node.semantic_cost_pub.messages) == 1
+    grid = node.semantic_cost_pub.messages[0]
+    low_key = node.voxel_map.get_voxel_indices(points[0])
+    high_key = node.voxel_map.get_voxel_indices(points[1])
+    low_index = (low_key[1] + 5) * 10 + low_key[0] + 5
+    high_index = (high_key[1] + 5) * 10 + high_key[0] + 5
+    assert grid.data[low_index] == 100
+    assert grid.data[high_index] == -1
+
+
+def test_semantic_costmap_fails_closed_without_robot_tf():
+    node, warnings = make_costmap_node(None)
+    node.voxel_map.update(
+        np.array([[2.1, 0.1, 0.1]], dtype=np.float32),
+        np.ones(1),
+        np.array([[0.0, 6.0]], dtype=np.float32),
+    )
+
+    assert node.publish_semantic_costmap() is False
+    assert node.semantic_cost_pub.messages == []
+    assert node.costmap_tf_warned is True
+    assert warnings
+
+
+def test_periodic_voxel_prune_uses_ros_time_and_robot_position():
+    calls = []
+
+    class FakePrunableMap:
+        voxels = {}
+
+        def prune(self, now_sec, **kwargs):
+            calls.append((now_sec, kwargs))
+            return {
+                'dynamic_ttl': 0,
+                'stale_ttl': 0,
+                'distance': 0,
+                'max_count': 0,
+                'total': 0,
+                'remaining': 0,
+            }
+
+    node = object.__new__(GABsvmNode)
+    node.voxel_map = FakePrunableMap()
+    node.dynamic_class_ids = {3, 4}
+    node.dynamic_voxel_ttl_sec = 10.0
+    node.voxel_ttl_sec = 300.0
+    node.voxel_prune_radius_m = 30.0
+    node.voxel_max_count = 250000
+    node.current_goal_key = None
+    robot_position = np.array([1.0, 2.0, 0.5])
+    node.get_robot_position = lambda: robot_position
+    node.get_clock = lambda: type(
+        'Clock',
+        (),
+        {'now': lambda self: type(
+            'Now', (), {'nanoseconds': 42_500_000_000})()},
+    )()
+    node.get_logger = lambda: type(
+        'Logger', (), {'info': lambda self, message: None})()
+
+    node.prune_voxel_map()
+
+    assert len(calls) == 1
+    assert calls[0][0] == 42.5
+    assert calls[0][1]['dynamic_class_ids'] == {3, 4}
+    np.testing.assert_allclose(calls[0][1]['center'], robot_position)
+
+
+def test_unverified_projection_calibration_suppresses_navigation_pose():
+    node = object.__new__(GABsvmNode)
+    node.projection_calibration_verified = False
+    node.last_query_text = 'white truck'
+    warnings = []
+    node.get_logger = lambda: type(
+        'Logger', (), {'warn': lambda self, message: warnings.append(message)})()
+
+    published = node._publish_query_goal({}, 5, 'segformer')
+
+    assert published is False
+    assert warnings
+    assert '标定' in warnings[0]
 
 
 def test_person_query_rejects_wall_sized_cluster():
@@ -112,12 +336,26 @@ def test_simulation_fallback_keeps_standoff_distance():
     node.query_clearance_radius_m = 0.35
     node.query_require_safe_approach = False
     node.semantic_cost_dict = {0: 0, 1: 100, 2: 100, 3: 100, 4: 100, 5: -1}
+    node.road_class_idx = 0
     node.get_robot_position = lambda: np.array([0.0, 0.0, 0.0])
     node.get_logger = lambda: type(
         'Logger', (), {'warn': lambda self, message: None})()
 
     _, goal = node.find_approach_goal(
         np.array([3.0, 0.0, 1.0], dtype=np.float32), query_class_idx=3)
+
+    np.testing.assert_allclose(goal, [2.0, 0.0, 0.0], atol=1e-6)
+
+
+def test_approach_goal_uses_named_road_class_after_vocab_reordering():
+    node = make_approach_node(np.array([4.0, 0.0, 0.0]))
+    node.road_class_idx = 1
+    node.semantic_cost_dict = {0: 100, 1: 0, 2: -1}
+    node.voxel_map.add((20, 0, 0), [2.0, 0.0, 0.0], 1)
+    node.voxel_map.add((0, 0, 0), [0.0, 0.0, 0.0], 0)
+
+    _, goal = node.find_approach_goal(
+        np.array([0.0, 0.0, 0.0]), query_class_idx=0)
 
     np.testing.assert_allclose(goal, [2.0, 0.0, 0.0], atol=1e-6)
 

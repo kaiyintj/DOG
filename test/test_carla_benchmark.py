@@ -1,6 +1,6 @@
 import numpy as np
 
-from semantic_mapping.carla_benchmark import (
+from semantic_mapping.carla.carla_benchmark import (
     actor_instance_id,
     augment_grid_truth_with_instances,
     bbox_from_mask,
@@ -16,13 +16,13 @@ from semantic_mapping.carla_benchmark import (
     make_coarse_masks,
     metrics_from_confusion,
 )
-from semantic_mapping.carla_capture_benchmark import (
+from semantic_mapping.carla.carla_capture_benchmark import (
     _balanced_vehicle_schedule,
     _forward_spawn_candidates,
     _spawn_vehicles,
     _spawn_walkers,
 )
-from semantic_mapping.semantic_schema import DEFAULT_CLASSES
+from semantic_mapping.runtime.semantic_schema import DEFAULT_CLASSES
 
 
 def test_carla_bgra_semantic_and_instance_decoding():

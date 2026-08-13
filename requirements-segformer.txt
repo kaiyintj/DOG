@@ -1,8 +1,10 @@
 # Isolated smoke-test versions used on the ROS 2 Humble development PC.
+-r requirements-runtime-common.txt
+
 transformers==4.46.3
 huggingface-hub==0.36.0
 tokenizers==0.20.3
-pillow>=9.0
 
 # Reuse the platform-specific torch build. On Lite3, install the JetPack-
-# compatible build and export the model to TensorRT instead of using this file.
+# compatible build and export the model to TensorRT. Record the exact wheel
+# with `python3 -m pip freeze`; do not replace a vendor build from this file.

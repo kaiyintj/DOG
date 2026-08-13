@@ -1,6 +1,6 @@
 # 运行手册
 
-更新日期：2026-08-04
+更新日期：2026-08-13
 
 本手册只描述 `~/ws` 当前代码可以实际执行的流程。系统能力边界见
 [PROJECT_STATUS.md](PROJECT_STATUS.md)。
@@ -32,7 +32,10 @@ export HF_HOME=~/ws/.cache/huggingface
 ```bash
 cd ~/ws
 source /opt/ros/humble/setup.bash
-colcon build --symlink-install --packages-select semantic_mapping
+colcon build \
+  --base-paths ~/ws/src/semantic_mapping \
+  --symlink-install \
+  --packages-select semantic_mapping
 source install/setup.bash
 ```
 
@@ -48,26 +51,52 @@ ros2 pkg executables semantic_mapping
 semantic_mapping active_perception_node
 semantic_mapping carla_capture_benchmark
 semantic_mapping carla_evaluate_benchmark
+semantic_mapping carla_capture_reliability
+semantic_mapping carla_evaluate_reliability
 semantic_mapping clip_node
 semantic_mapping clip_query
 semantic_mapping ga_bsvm_node
 semantic_mapping nav_goal_bridge_node
+semantic_mapping segformer_checkpoint
+semantic_mapping segformer_dataset
+semantic_mapping segformer_finetune
+semantic_mapping segformer_image
 semantic_mapping segformer_node
 ```
 
-检查 Python 模型依赖：
+代码已按用途分层：`semantic_mapping/runtime/` 放实际运行代码及其依赖的共用核心，
+`semantic_mapping/carla/` 只放 CARLA 仿真采集与评测代码；`runtime/` 不依赖
+`carla/`。上面这些 ROS 入口的名字没有变，直接按本手册命令运行即可。
+
+CARLA 的二维图像识别基准和三维点级 reliability 基准是两套独立数据格式。
+后者的完整采集、评测、时间偏移、Semantic LiDAR GT 对齐和输出解释见
+[CARLA_RELIABILITY_BENCHMARK.md](CARLA_RELIABILITY_BENCHMARK.md)。
+
+电动自行车数据校验、微调和权重验收流程见
+[SEGFORMER_EBIKE_FINETUNE.md](SEGFORMER_EBIKE_FINETUNE.md)。
+
+检查 Python 模型依赖和实际版本：
 
 ```bash
-python3 -c "import torch, PIL, scipy, open_clip, transformers; print('Python dependencies OK')"
+python3 -c "import numpy, scipy, torch, PIL, transformers; print('numpy=', numpy.__version__, 'scipy=', scipy.__version__, 'torch=', torch.__version__, 'Pillow=', PIL.__version__, 'transformers=', transformers.__version__)"
 ```
 
-仅在缺失 SegFormer 依赖时安装：
+当前系统的 SciPy 1.8 与 NumPy 1.26 会产生版本不兼容警告。正式实验使用隔离环境，先安装
+与桌面 CUDA 或 JetPack 对应的 Torch，再安装项目锁定的数值与模型依赖：
 
 ```bash
 python3 -m pip install --user -r ~/ws/src/semantic_mapping/requirements-segformer.txt
 ```
 
-不要在正式实验前临时升级 NumPy、SciPy 或 Torch。应先建立独立环境并记录完整版本。
+CLIP 对比路线另用：
+
+```bash
+python3 -m pip install --user -r ~/ws/src/semantic_mapping/requirements-clip.txt
+```
+
+不要在正在运行的 ROS 系统里临时升级 NumPy、SciPy 或 Torch，也不要让 `colcon build`
+隐式替换系统环境。锁定组合见 `requirements-runtime-common.txt`；安装后重新运行上面的
+版本检查并保存 `python3 -m pip freeze`。
 
 ### 四种运行组合
 
@@ -92,12 +121,27 @@ CLIP 和 SegFormer 是二选一的语义前端，FAST-LIO 与 GA-BSVM 是两条�
 ps -ef | rg "gzserver|gzclient|fastlio_mapping|rviz2|clip_node|segformer_node|ga_bsvm_node|nav_goal_bridge_node|active_perception_node"
 ```
 
-如果 Gazebo 已经关闭但仍有残留进程，可分别发送中断信号：
+如果 Gazebo 已经关闭但仍有残留进程，必须一次只给 `pkill` 一个进程名。先温和停止，
+等待后再清理仍未退出的进程：
 
 ```bash
-pkill -INT gzserver
-pkill -INT gzclient
+pkill -TERM -x gzclient 2>/dev/null || true
+pkill -TERM -x gzserver 2>/dev/null || true
+sleep 3
+pkill -KILL -x gzclient 2>/dev/null || true
+pkill -KILL -x gzserver 2>/dev/null || true
 ```
+
+不要写成 `pkill gzclient gzserver`；`pkill` 只接受一个匹配模式，这种写法会直接报错，
+两个进程都不会停止。清理后必须确认 Gazebo 默认端口已经释放：
+
+```bash
+pgrep -af 'gzserver|gzclient'
+ss -ltnp | rg ':11345'
+```
+
+两条命令都应无输出。若原来的 `ros2 launch` 终端仍在运行，先在该终端按 `Ctrl+C`，
+否则只结束 GUI 不能保证服务器退出。
 
 刷新 ROS 2 节点发现缓存：
 
@@ -208,19 +252,23 @@ ros2 topic pub --once /text_query std_msgs/msg/String "{data: 'car'}"
 如果日志显示“未找到合适目标”，让 Bag 继续播放、等待 SegFormer 和 GA-BSVM 再融合
 一些帧，然后重新发布同一个查询。
 
-本版本在该 Bag 中已经得到过如下有效结果：`car` 目标簇 2 个体素、证据 6.0，目标中心
-约为 `(13.20, -2.75)`，安全接近点约为 `(14.15, -3.15)`。坐标随播放起点、处理帧和
-参数可能变化，判断成功应以 GA-BSVM 的“导航触发”日志以及两个 Pose 话题为准。
+本版本在该 Bag 中已经得到过如下有效结果：`car` 目标簇 2 个体素、证据 6.0，观测表面
+簇质心约为 `(13.20, -2.75)`，安全接近点约为 `(14.15, -3.15)`。坐标随播放起点、
+处理帧和参数可能变化，判断成功应以 GA-BSVM 的“导航触发”日志以及两个 Pose 话题为准。
 
 以下命令用于能力边界测试，不应作为第一次冒烟测试：
 
 ```bash
 ros2 topic pub --once /text_query std_msgs/msg/String "{data: 'bicycle'}"
+ros2 topic pub --once /text_query std_msgs/msg/String "{data: 'electric bicycle'}"
+ros2 topic pub --once /text_query std_msgs/msg/String "{data: '电动车'}"
+ros2 topic pub --once /text_query std_msgs/msg/String "{data: 'motorcycle'}"
 ros2 topic pub --once /text_query std_msgs/msg/String "{data: 'blue car'}"
 ```
 
 当前 Bag 的 SegFormer 帧统计中 `bicycle` 可能始终为 0；`blue car` 还需要颜色门控通过。
-两者没有输出不等于链路故障。
+默认 Cityscapes 权重不能输出 `electric_bicycle`，因此两个电动车查询应安全失败；
+换用带电动自行车标签的微调 SegFormer 后才能用于能力验收。
 
 如果场景中不存在该类别，或者类别、颜色、证据和聚类阈值未通过，不发布目标是正常的
 拒绝行为，不代表节点崩溃。
@@ -286,7 +334,8 @@ FAST-LIO launch 已经启动 RViz。建议设置：
 - PointCloud2 `/semantic_cloud`：语义类别点云，Color Transformer 设为 `RGB8`；
 - PointCloud2 `/uncertainty_cloud`：不确定性点云，Color Transformer 设为 `RGB8`；
 - Map `/semantic_cost_map`：二维语义代价地图；
-- Pose `/query_target_pose`：物体估计位置；
+- Image `/segformer/project_posterior`：原生解码分辨率 `16FC13` 完整后验；
+- Pose `/query_target_pose`：当前可见语义表面簇质心，不等于物体几何中心；
 - Pose `/goal_pose`：接近点；
 - Image `/segformer/color_mask`：SegFormer 预览。
 
@@ -303,7 +352,7 @@ SegFormer 使用 sensor-data QoS。如果 RViz Image 显示 `No Image` 或出现
 ## 6. Gazebo：Go2 car benchmark
 
 推荐先使用静态红色汽车世界，因为目标几何体、视觉模型和 LiDAR 碰撞位于同一位置。
-终端 1、2、5、6 是两种后端共用的；终端 3、4 只选择 SegFormer 或 CLIP 中的一组。
+终端 1、2、5 是两种后端共用的；终端 3、4 只选择 SegFormer 或 CLIP 中的一组。
 
 ### 终端 1：Gazebo 和 Go2
 
@@ -311,17 +360,11 @@ SegFormer 使用 sensor-data QoS。如果 RViz Image 显示 `No Image` 或出现
 source /opt/ros/humble/setup.bash
 source ~/ws/install/setup.bash
 
-ros2 launch go2_config gazebo.launch.py \
-  world:=/home/yk/ws/src/unitree-go2-ros2/unitree_go2_description/worlds/outdoor_car_benchmark.world \
-  world_init_x:=0.0 \
-  world_init_y:=0.0 \
-  world_init_z:=0.35 \
-  cmd_vel_topic:=/cmd_vel_champ \
-  gui:=true \
-  rviz:=false \
-  use_sim_time:=true
-```
+ros2 launch go2_config gazebo.launch.py   world:=/home/yk/ws/src/unitree-go2-ros2/unitree_go2_description/worlds/school_parking_lot.world  world_init_x:=0.0   world_init_y:=0.0   world_init_z:=0.35   cmd_vel_topic:=/cmd_vel_champ   gui:=true   rviz:=false   use_sim_time:=true
 
+```
+查看图像窗口
+ros2 run rqt_image_view rqt_image_view
 等待以下话题出现：
 
 ```bash
@@ -354,8 +397,13 @@ export HF_HOME=~/ws/.cache/huggingface
 ros2 run semantic_mapping segformer_node --ros-args \
   --params-file ~/ws/src/semantic_mapping/config/semantic_mapping_sim_livox.yaml \
   -p use_sim_time:=true \
-  -p device:=cpu
+  -p device:=cuda \
+  -p use_fp16:=true
 ```
+
+当前工作站有可用 NVIDIA CUDA 时使用上述设置；若 CUDA 不可用，节点会记录警告并回退
+CPU。不要在 GPU 可用时强制 `device:=cpu`，否则 SegFormer 推理更容易压低 Gazebo 的
+Real Time Factor，使墙钟时间下的机器人运动忽快忽慢。
 
 ### 方案 A，终端 4：GA-BSVM（SegFormer）
 
@@ -405,26 +453,59 @@ CLIP 路线不要启动 `segformer_node`。还可提前运行
 source /opt/ros/humble/setup.bash
 source ~/ws/install/setup.bash
 
-ros2 launch semantic_mapping nav_with_remap.launch.py \
-  use_sim_time:=true
+ros2 launch semantic_mapping nav_sim.launch.py
 ```
 
-该 launch 会同时加载 Nav2、`nav2_params.yaml` 和 `nav_goal_bridge_node`。桥接节点
-把 `/goal_pose` 转换为 `/navigate_to_pose` action，并在服务器未启动、拒绝目标以及
-导航结束时输出明确日志。
+该 launch 会同时加载 Nav2、`nav2_params.yaml`、`nav_goal_bridge_node` 和
+`active_perception_node`。桥接节点把 `/goal_pose` 转换为
+`/navigate_to_pose` action；仿真入口固定采用 `/clock`、`/odom` 和
+`semantic_mapping_sim_livox.yaml`，将 Nav2 velocity smoother 的 `/cmd_vel`
+转发为 `/cmd_vel_champ`。不要再从旧聊天复制通用 launch 加参数的命令。
 
-### 终端 6：主动感知速度调节
+不要再另开终端重复启动主动感知节点。若只做不带速度门控的 Nav2 结构诊断，可显式传
+`active_perception_enabled:=false`；这种模式不属于闭环导航配置。
+
+### 键盘建图与闭环导航必须分开
+
+键盘建图/补充观察时不要启动终端 5 的 Nav2。此时直接让键盘成为
+`/cmd_vel_champ` 的唯一发布者：
 
 ```bash
-source /opt/ros/humble/setup.bash
-source ~/ws/install/setup.bash
-
-ros2 run semantic_mapping active_perception_node --ros-args \
-  --params-file ~/ws/src/semantic_mapping/config/semantic_mapping_sim_livox.yaml \
-  -p use_sim_time:=true
+ros2 run teleop_twist_keyboard teleop_twist_keyboard \
+  --ros-args --remap cmd_vel:=/cmd_vel_champ
 ```
 
-只启动一次。该配置订阅 `/cmd_vel`，输出 `/cmd_vel_champ` 给 CHAMP。
+检查最终速度话题：
+
+```bash
+ros2 topic info /cmd_vel_champ --verbose
+```
+
+`Publisher count` 应为 1，发布者应是键盘节点。进入闭环语义导航前停止键盘节点，再启动
+终端 5；此时 `/cmd_vel_champ` 的唯一发布者应变为 `active_perception_node`。不要让键盘
+和主动感知同时发布 `/cmd_vel_champ`，也不要在 Nav2 action 仍执行时用键盘抢占控制。
+
+注意：`nav_sim.launch.py` 默认在内部启动 `active_perception_node`，即使用户只手动
+打开了“Nav”这一个终端，主动感知依然存在。可用以下命令核对实际速度链：
+
+```bash
+ros2 node list | rg 'active_perception|nav_goal_bridge'
+ros2 param get /active_perception_node nav_cmd_vel_topic
+ros2 param get /active_perception_node cmd_vel_topic
+ros2 param get /active_perception_node imu_topic
+ros2 topic info /cmd_vel_champ --verbose
+ros2 topic echo /semantic_speed_scale
+ros2 topic echo /perception_mode
+```
+
+仿真闭环的正确结果应为 `/cmd_vel -> active_perception_node -> /cmd_vel_champ`。若
+`/perception_mode` 显示 `STALE[...]`，表示 `/plan`、`/voxel_entropy_data` 或
+`/imu/data` 已缺失/过期，节点会立即降到最低倍率；若 250 ms 未收到新的 `/cmd_vel`，
+独立稳态时钟 watchdog 会发布一次零速。`/semantic_speed_scale < 1.0` 且没有 STALE 时，
+速度降低来自当前路径不确定度；若最终话题只有一个发布者且倍率接近 1.0，但 Gazebo
+底部 `Real Time Factor` 低于 1.0，则墙钟时间下变慢来自仿真负载。
+例如 `Real Time Factor=0.70` 表示仿真只以约 70% 实时速度运行，不应把它归因于导航
+算法。正式记录导航耗时时必须同时记录 Real Time Factor。
 
 ### 先验证手动导航
 
@@ -434,6 +515,7 @@ ros2 run semantic_mapping active_perception_node --ros-args \
 ros2 action info /navigate_to_pose
 ros2 topic hz /cmd_vel
 ros2 topic hz /cmd_vel_champ
+ros2 topic echo /nav_goal_bridge/status
 ```
 
 如果 `/cmd_vel` 有数据而 `/cmd_vel_champ` 没有，检查 `active_perception_node`；如果两者
@@ -461,8 +543,9 @@ ros2 topic pub --once /text_query std_msgs/msg/String "{data: 'car'}"
 ros2 topic pub --once /text_query std_msgs/msg/String "{data: 'red car'}"
 ```
 
-汽车模型中心在 Gazebo 世界约 `(6, 0)`。`/query_target_pose` 应位于汽车附近，
-`/goal_pose` 应位于汽车外侧的接近位置。
+汽车模型中心在 Gazebo 世界约 `(6, 0)`。`/query_target_pose` 是当前可见语义表面点组成
+的空间簇质心，不是 Gazebo 模型的几何中心；它应落在汽车可见车身附近。
+`/goal_pose` 才是机器人实际执行的车外 road 接近点。
 
 查询成功后应看到 `nav_goal_bridge_node` 依次输出“收到语义导航目标”和“Nav2 已接受
 目标”。如果 action 尚不可用，目标会被缓存，Nav2 启动后自动发送，无需人工复制坐标。
@@ -484,7 +567,20 @@ ros2 topic pub --once /text_query std_msgs/msg/String "{data: 'red car'}"
 
 必须先停止旧 `ga_bsvm_node`、Nav2 和 Gazebo，再按本节重新启动。GA-BSVM 体素图只
 存在于进程内，重新启动能避免旧错误颜色证据继续参与本轮验收。终端 1 使用下面的世界，
-其余终端继续使用本章终端 2、方案 A 终端 3/4、终端 5 和终端 6 的命令：
+其余终端继续使用本章终端 2、方案 A 终端 3/4 和终端 5 的命令。
+
+停车场四辆车的 Gazebo 模型默认位于 `~/.gazebo/models`。启动前先确认资源完整：
+
+```bash
+for color in red blue white yellow; do
+  test -f ~/.gazebo/models/semantic_sedan_${color}/model.sdf || \
+    echo "missing semantic_sedan_${color}"
+done
+```
+
+没有输出才表示四个模型都存在。
+
+然后按第 2 节逐个关闭旧 `gzclient`/`gzserver` 并确认 `11345` 端口为空，再启动：
 
 ```bash
 ros2 launch go2_config gazebo.launch.py \
@@ -498,16 +594,37 @@ ros2 launch go2_config gazebo.launch.py \
   use_sim_time:=true
 ```
 
+如果 GUI 仍显示旧的绿色简易世界，不要继续测试，也不要只反复打开 GUI。先停止上面的
+完整 launch，直接验证世界文件：
+
+```bash
+gzserver --verbose \
+  /home/yk/ws/src/unitree-go2-ros2/unitree_go2_description/worlds/school_parking_lot.world
+```
+
+成功标志是：
+
+```text
+Loading world file [.../school_parking_lot.world]
+```
+
+需要查看画面时，在第二个终端运行 `gzclient`。验证结束后先关闭 `gzclient`，再在
+`gzserver` 终端按 `Ctrl+C`，确认 `11345` 已释放后才能运行 ROS launch。手动
+`gzserver` 与 `ros2 launch go2_config gazebo.launch.py` 不能同时运行，否则后者会因
+`Address already in use` 启动失败，并可能让旧 GUI 看起来像是又加载了旧地图。
+
 发布查询前检查感知、Nav2 和桥接节点：
 
 ```bash
 ros2 node list | grep -E "nav_goal_bridge|bt_navigator|planner_server|controller_server"
 ros2 action info /navigate_to_pose
 ros2 topic hz /segformer/class_mask
+ros2 topic hz /segformer/project_posterior
 ros2 topic hz /semantic_cloud
 ```
 
-分别提前监听目标中心和接近点：
+分别在两个终端提前监听观测目标和接近点；这两个话题只在查询成功时发布一次，查询后
+才启动 `--once` 可能收不到本次消息：
 
 ```bash
 ros2 topic echo /query_target_pose --once
@@ -527,7 +644,7 @@ ros2 topic pub --once /text_query std_msgs/msg/String "{data: 'white truck'}"
 
 1. GA-BSVM 日志解析为 `class=truck, color=white`；
 2. 被接受簇的 `color_support` 不低于配置值 30%；
-3. `/query_target_pose` 位于白车附近，而不是旧结果所对应的红车附近；
+3. `/query_target_pose` 位于白车的可见车身范围附近，而不是旧结果所对应的红车附近；
 4. `nav_goal_bridge_node` 输出 action 已接受，随后 `/cmd_vel` 和
    `/cmd_vel_champ` 均有数据；
 5. 若白车证据不足，系统应拒绝发布目标，不能退化为选择红车。
@@ -555,6 +672,20 @@ ros2 topic pub --once /text_query std_msgs/msg/String "{data: 'yellow truck'}"
 5. 控制日志不能再出现连续 `Failed to make progress` 或
    `No valid trajectories out of 419`；action 必须明确成功，否则本轮记为失败。
 
+这里不能把 `/query_target_pose` 当作黄车几何中心 `(2.8, -4.5)` 直接比较。黄车模型
+尺寸约为 `4.40 x 1.82 m`，在 world 中旋转 90 度后，车身水平范围约为
+`x=[1.89, 3.71]`、`y=[-6.70, -2.30]`。2026-08-10 的一次实际查询得到：
+
+```text
+/query_target_pose = (3.354, -2.390)
+/goal_pose         = (5.350, -2.550)
+```
+
+前者位于黄车可见的前右车角；后者与前者相距约 `2.00 m`，符合
+`query_approach_distance_m: 2.0`，目标朝向也指回黄车。这组结果说明“识别到可见车身
+表面，并在其外侧选择接近点”，不是导航到错误车辆。当前接近点选择是在连续 road 体素
+中完成的，不会强制输出离散的“车上方/下方/左侧/右侧”；斜前方安全点属于允许结果。
+
 历史 TF 晚到现在由有界队列短暂等待。日志出现“进入有界重试队列”本身不是失败；若
 持续出现“等待历史TF超时，已安全丢弃”，仍需检查 FAST-LIO 延迟、单一 TF 权威源和
 系统负载，不能用最新 TF 替代点云时刻 TF。
@@ -574,7 +705,8 @@ ros2 topic pub --once /text_query std_msgs/msg/String "{data: 'person'}"
 ```
 
 不要用 `outdoor_terrain.world` 中移动 actor 的历史点云做定位精度评价。普通 Gazebo
-actor 对 ray sensor 没有与视觉同步的碰撞代理，而且当前体素图没有动态目标清除与跟踪。
+actor 对 ray sensor 没有与视觉同步的碰撞代理。当前体素图已有连续时间衰减和动态 TTL，
+但仍没有射线自由空间清除、动态实例关联与跟踪，不能据此评价移动目标定位精度。
 
 ## 8. Lite3 实机传感器采集与上机前清单
 
@@ -759,14 +891,77 @@ header 最大间隔分别不超过 0.05、0.20、0.25 和 0.25 秒，并继续�
 
 ### 8.7 进入运动测试前仍需完成
 
-`semantic_mapping_lite3_real.yaml` 已使用实测传感器话题，但仍不能直接用于实机运动：
+仿真配置到实机的主要对应关系是：
 
-1. 保存完整 TF 树，并确认只有一个定位源发布 `odom -> base_link`；
-2. 使用实测 `CameraInfo` 替换 `camera_k`；
-3. 完成 LiDAR-相机外参标定，替换 translation/quaternion；
-4. 将 FAST-LIO、Nav2 和机器人状态估计统一到同一坐标系；
-5. 按云深处官方 SDK 实现速度命令、安全状态、急停和超时保护桥接；
-6. 先架空、再低速空场、最后有障碍环境测试。
+| 仿真 | Lite3 实机候选 | 说明 |
+| --- | --- | --- |
+| `semantic_mapping_sim_livox.yaml` | `semantic_mapping_lite3_real.yaml` | 语义融合、查询和主动感知参数 |
+| `fast_lio/config/sim_mid360.yaml` | `semantic_mapping/config/fast_lio_lite3_real.yaml` | 受控运动数据的定位/建图候选 |
+
+`fast_lio_lite3_offline.yaml` 不能替代第二行。它只服务静止烟测，关闭了运动导航所需的
+几何输出和机体系点云。
+
+当前实机配置有四层失败关闭保护：
+
+1. GA-BSVM 必须收到与 `/camera/color/image_raw` 同模式的
+   `/camera/color/camera_info` 才投影；内参会按实际图像尺寸缩放；
+2. 当前投影代码不校正畸变。若 CameraInfo 含非零畸变而输入不是校正图，节点会拒绝
+   投影；
+3. `projection_calibration_verified: false` 时可以观察调试语义图，但不会发布
+   `/query_target_pose` 或 `/goal_pose`；
+4. 主动感知只输出 `/cmd_vel_lite3_safe`。在云深处 SDK 安全桥未实现时该话题没有
+   执行端，机器人不会因误启动算法节点而运动。
+
+当前地图和速度门控还固定了以下安全边界：证据按实际经过时间连续衰减，未再次击中的
+体素也会由周期剪枝老化；颜色、特征和总观测权重均有上限。动态类别 10 秒未重新观测
+后清理，其他体素受 300 秒 TTL、30 米半径和 250000 数量上限约束；语义 costmap 仅投影相对
+`base_link` 高度 `[-0.6, 1.0] m` 的体素；遗留 `/map` 发布关闭；主动感知从 13 类自动
+计算 `h_max`，并在使用 `/plan`、不确定度点云和 IMU 前检查消息时间。当前尚无 LiDAR
+射线自由空间清除，动态遮挡环境仍需额外验收。参数可根据实测调整，但不得关闭高度
+过滤、地图上限、输入新鲜度或 frame 失败关闭来绕过故障。
+
+不得通过关闭上述门控或降低 GA-BSVM 阈值跳过标定。解锁运动前必须按顺序完成：
+
+1. 保存完整 TF 树，核对点云 `header.frame_id`，并确认只有一个定位源发布
+   `odom -> base_link`；
+2. 核对 424x240 图像与 CameraInfo 的时间戳、frame、K、D。若 D 非零，改用对应的
+   rectified 图像/CameraInfo，不能把 D 手工改成零；
+3. 完成 `lidar frame -> camera color optical frame` 外参标定，替换
+   `lidar_to_camera_translation/quaternion`，再用多距离、多方位标志物检查投影叠加；
+4. 使用受控运动 Bag 验证 `fast_lio_lite3_real.yaml` 的轨迹、漂移、
+   `/cloud_registered_body`、历史 TF 命中率和 MID360 内部 IMU 外参收敛；
+5. 在 Humble 开发电脑/服务器运行 Nav2 时用 `odom_topic:=/Odometry` 对接 FAST-LIO，
+   并再次确认 TF 只有一个权威源；
+6. 按云深处官方 SDK 实现唯一运动桥：订阅 `/cmd_vel_lite3_safe`，完成限速、姿态/模式
+   检查、急停、命令超时自动零速和网络断开本地停车；
+7. 完成以上验收后才把 `projection_calibration_verified` 改为 `true`，然后依次进行
+   架空、低速空场和障碍环境测试。
+
+在 Humble 开发电脑上做“不下发底盘命令”的结构检查时，可使用：
+
+```bash
+source /opt/ros/humble/setup.bash
+source ~/ws/install/setup.bash
+
+ros2 launch fast_lio mapping.launch.py \
+  config_path:=~/ws/src/semantic_mapping/config \
+  config_file:=fast_lio_lite3_real.yaml \
+  use_sim_time:=false \
+  rviz:=true
+```
+
+另一个终端只启动 Nav2 结构检查，并关闭语义目标 action 桥：
+
+```bash
+source /opt/ros/humble/setup.bash
+source ~/ws/install/setup.bash
+
+ros2 launch semantic_mapping nav_lite3_real.launch.py
+```
+
+该入口默认 `use_sim_time=false`、`odom_topic=/Odometry`，并保持
+`goal_bridge_enabled=false`。上述命令不等于实机运动授权。机器人机载环境是 Foxy；若 Nav2/算法运行在外部 Humble
+电脑，必须把 DDS 网络、消息类型和云深处 SDK 本地安全桥作为独立接口验收。
 
 若把算法放在外部服务器运行，机器人和服务器之间才需要稳定可路由网络、一致的
 `ROS_DOMAIN_ID` 和兼容 DDS。此时必须测量相机/点云带宽、往返延迟、丢包率和控制命令
@@ -924,11 +1119,17 @@ ros2 topic hz /相机话题
 ros2 topic hz /点云话题
 ros2 topic hz /segformer/class_mask
 ros2 topic hz /segformer/confidence
+ros2 topic hz /segformer/project_posterior
 ros2 run tf2_ros tf2_echo odom base_link
 ```
 
 还要检查 GA-BSVM 日志中的“投影并融合 N/M 个3D点”。如果 N 长期为 0，优先检查
 相机内参、LiDAR-相机外参、图像尺寸、时间戳和同步 QoS。
+
+SegFormer 配置默认 `segformer_use_full_posterior: true`。正常启动时 GA-BSVM 应记录
+`full project posterior ... (FP16 grid)`。只有复现实验中的旧硬标签基线时才设置
+`segformer_use_full_posterior:=false`；该回退会恢复 mask+最大置信度人工重构分布，不能
+作为概率保真方法的正式结果。
 
 ### `/uncertainty_cloud` 大面积红色
 
@@ -959,8 +1160,10 @@ M2DGR Bag 的相机视野内有效 LiDAR 投影较稀疏，因此该配置允许
 Gazebo 与 Lite3 配置要求机器人位姿可用并存在同侧安全 road 体素。找不到同侧点时
 不发布目标是新的安全拒绝行为，不应重新打开 `query_require_safe_approach=false` 规避。
 
-SegFormer 只能查询当前 12 类及其别名。任意开放词汇应改用 CLIP，或者后续接入实例级
-开放词汇模型。
+SegFormer 只能查询当前 13 类及其别名，且实际可识别类别取决于启动时打印的
+`checkpoint supported navigation classes`。默认 Cityscapes 权重不支持
+`electric_bicycle`；仅在词表里加别名不会创造该识别能力。任意开放词汇应改用
+CLIP，或者换用含目标标签的 SegFormer 微调权重。
 
 ### 有 `/goal_pose` 但机器人不动
 
@@ -998,3 +1201,140 @@ ros2 bag record \
 
 同时记录：Git commit、YAML 文件、模型版本、世界文件、查询文本、目标真值、是否成功、
 耗时、路径长度、最终距离和碰撞情况。没有这些元数据的截图不能作为可重复的论文结果。
+
+## 11. CARLA 基准测试入口
+
+CARLA 相关代码位于 `semantic_mapping/carla/`，四个 ROS 入口如下：
+
+| 入口 | 用途 | 详细文档 |
+| --- | --- | --- |
+| `carla_capture_benchmark` | 采集二维图像识别基准（RGB/语义/实例相机） | `CARLA_IMAGE_BENCHMARK.md` |
+| `carla_evaluate_benchmark` | CLIP/SegFormer 图像分类与颜色评测 | `CARLA_IMAGE_BENCHMARK.md` |
+| `carla_capture_reliability` | 采集三维点级可靠性数据（普通/语义 LiDAR + IMU） | `CARLA_RELIABILITY_BENCHMARK.md` |
+| `carla_evaluate_reliability` | 五因素可靠性、时间偏移、消融与 VoxelMap 评测 | `CARLA_RELIABILITY_BENCHMARK.md` |
+
+每组代码都有不需要 CARLA 服务器和模型权重的离线冒烟测试，先跑一遍确认安装和分层
+改动没有破坏入口：
+
+```bash
+cd ~/ws/src/semantic_mapping
+PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python3 -m pytest \
+  test/test_carla_benchmark.py \
+  test/test_carla_reliability.py \
+  test/test_carla_reliability_capture.py \
+  test/test_carla_evaluate_reliability.py \
+  test/test_reliability_factors.py \
+  test/test_reliability_voxel_ablation.py \
+  -q
+```
+
+确认参数解析正常：
+
+```bash
+ros2 run semantic_mapping carla_capture_benchmark --help
+ros2 run semantic_mapping carla_evaluate_benchmark --help
+ros2 run semantic_mapping carla_capture_reliability --help
+ros2 run semantic_mapping carla_evaluate_reliability --help
+```
+
+再启动 CARLA server（另一终端），并先验证连接：
+
+```bash
+cd /home/yk/ws/third_party/CARLA_0.9.16
+./CarlaUE4.sh -RenderOffScreen -quality-level=Low -carla-port=2000
+
+python3 -c "
+import carla
+c = carla.Client('127.0.0.1', 2000)
+c.set_timeout(10)
+print('CARLA:', c.get_server_version())
+"
+```
+
+### 11.1 图像识别基准
+
+```bash
+cd /home/yk/ws
+source /opt/ros/humble/setup.bash
+source install/setup.bash
+
+RUN_DIR="/home/yk/ws/carla_benchmark_data/town05_v2_$(date +%Y%m%d_%H%M%S)"
+printf '%s\n' "$RUN_DIR" > /home/yk/ws/carla_benchmark_data/LATEST_DATASET.txt
+
+ros2 run semantic_mapping carla_capture_benchmark \
+  --host 127.0.0.1 \
+  --port 2000 \
+  --map Town05 \
+  --output "$RUN_DIR" \
+  --cache-dir /home/yk/ws/.cache/carla \
+  --frames 30 \
+  --save-every 1 \
+  --vehicles 12 \
+  --vehicle-classes car truck bus bicycle motorcycle \
+  --width 640 \
+  --height 480 \
+  --grid-rows 4 \
+  --grid-cols 6 \
+  --seed 42 \
+  --stationary-ego
+
+export HF_HOME=/home/yk/ws/.cache/huggingface
+export TORCH_HOME=/home/yk/ws/.cache/torch
+
+ros2 run semantic_mapping carla_evaluate_benchmark \
+  --dataset "$RUN_DIR" \
+  --backend segformer \
+  --device cuda \
+  --fp16 \
+  --save-overlay-every 1
+```
+
+### 11.2 三维可靠性基准
+
+```bash
+cd /home/yk/ws
+source /opt/ros/humble/setup.bash
+source install/setup.bash
+
+RUN_DIR="/home/yk/ws/carla_benchmark_data/reliability_town05_seed42_$(date +%Y%m%d_%H%M%S)"
+printf '%s\n' "$RUN_DIR" > /home/yk/ws/carla_benchmark_data/LATEST_RELIABILITY_DATASET.txt
+
+ros2 run semantic_mapping carla_capture_reliability \
+  --host 127.0.0.1 \
+  --port 2000 \
+  --traffic-manager-port 8000 \
+  --town Town05 \
+  --weather ClearNoon \
+  --seed 42 \
+  --num-frames 30 \
+  --warmup-frames 10 \
+  --output-dir "$RUN_DIR" \
+  --cache-dir /home/yk/ws/.cache/carla \
+  --fixed-delta 0.01 \
+  --camera-tick 0.01 \
+  --lidar-tick 0.05 \
+  --width 640 \
+  --height 480 \
+  --fov 90 \
+  --lidar-channels 64 \
+  --lidar-range 50 \
+  --vehicles 12 \
+  --vehicle-classes car truck bus bicycle motorcycle \
+  --stationary-ego \
+  --no-moving-targets
+
+export HF_HOME=/home/yk/ws/.cache/huggingface
+export TORCH_HOME=/home/yk/ws/.cache/torch
+
+ros2 run semantic_mapping carla_evaluate_reliability \
+  --dataset "$RUN_DIR" \
+  --params-file /home/yk/ws/src/semantic_mapping/config/semantic_mapping_sim_livox.yaml \
+  --time-offset-ms 0 20 50 100 150 \
+  --device cuda \
+  --fp16 \
+  --voxel-eval
+```
+
+以上先用 30 帧冒烟；正式实验按两个 CARLA 文档里的完整参数（帧数、seed 矩阵、
+LiDAR 密度/运动剖面、输出目录归档）执行。两组 benchmark 的数据格式互不兼容，
+采集命令和数据目录不要混用。

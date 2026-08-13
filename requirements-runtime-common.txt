@@ -1,0 +1,6 @@
+# Reproducible numerical/image stack for the ROS 2 Humble development PC.
+# NumPy 1.26 and Ubuntu 22.04's system SciPy 1.8 are incompatible; keep these
+# two pins together. Torch remains platform-specific (desktop CUDA vs JetPack).
+numpy==1.26.4
+scipy==1.11.4
+Pillow>=9,<13

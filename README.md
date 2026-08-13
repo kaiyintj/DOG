@@ -8,10 +8,22 @@ Current project truth and reproducible commands are maintained in:
 - [Current version status](docs/PROJECT_STATUS.md)
 - [Bag, Gazebo and Lite3 runbook](docs/RUNBOOK.md)
 - [CARLA CLIP/SegFormer image benchmark](docs/CARLA_IMAGE_BENCHMARK.md)
+- [CARLA point-level reliability benchmark](docs/CARLA_RELIABILITY_BENCHMARK.md)
 
 The status document distinguishes implemented code from validated behavior and
 known deployment gaps. Its `新对话交接摘要` section is the handoff point for a
 new conversation. Use it instead of commands copied from older chats.
+
+## Code layout
+
+Python sources are split inside the package:
+
+- `semantic_mapping/runtime/`: modules the real robot system uses, plus the
+  shared core they depend on (VoxelMap, semantic ontology, posterior,
+  projection, reliability factors, SegFormer/CLIP nodes, active perception,
+  navigation goal bridge).
+- `semantic_mapping/carla/`: CARLA-simulation-only capture and evaluation
+  tooling. Nothing under `runtime/` imports `carla/`.
 
 ## Mapping and navigation method
 
@@ -22,9 +34,12 @@ from one frame are aggregated per voxel and contribute bounded evidence, which
 avoids confidence being determined only by LiDAR sampling density.
 
 With the CLIP backend, each voxel stores both a closed-set semantic posterior
-and a normalized CLIP feature. With the SegFormer backend, the timestamped
-pixel class and confidence update the same posterior without a CLIP feature.
-Both backends also fuse the RGB color observed at each projected LiDAR point.
+and a normalized CLIP feature. With the SegFormer backend, all checkpoint
+probabilities are summed into the 13 project classes before ``argmax``. A
+Header-bearing native-resolution FP16 posterior grid updates the same voxel
+posterior without inventing a uniform distribution for the non-maximum
+classes. Both backends also fuse the RGB color observed at each projected
+LiDAR point.
 Language targets are selected from spatial clusters rather than a single
 maximum voxel. CLIP supports open-vocabulary similarity; SegFormer supports the
 configured closed-set navigation classes. Object-like goals must have a
@@ -39,7 +54,19 @@ request and reports whether the server accepted, rejected or completed it.
 `active_perception_node` converts the fused semantic and epistemic uncertainty
 along the local path into a filtered velocity scale. Linear and angular
 velocity are scaled together by default so the executed arc remains the one
-that DWB collision-checked.
+that DWB collision-checked. The categorical bound is derived from the configured
+class count, incoming paths and uncertainty clouds are transformed into `odom`,
+the risk score blends its mean with an upper percentile, and scale changes are
+limited per second rather than per callback.
+
+The semantic map continuously decays evidence against elapsed time rather than
+callback count. Periodic pruning also ages voxels that are not hit again, while
+class/color/feature weights use bounded EMA-style accumulation. Dynamic classes
+still have a short TTL, and the remaining map is bounded by age, distance and
+voxel count. Ray-based free-space clearing is not implemented yet. Its Nav2
+projection only uses a height band relative to `base_link`; the legacy
+OccupancyGrid output is disabled by default, leaving `/semantic_cost_map` as
+the only semantic Nav2 map topic.
 
 In Gazebo the command chain is deliberately separated to keep a single writer
 at each stage: Nav2 publishes `/cmd_vel_nav`, its velocity smoother publishes
@@ -50,19 +77,38 @@ only `/cmd_vel_champ`.
 collision-aware navigation approach point, so the two poses are intentionally
 separated for object-like queries.
 
-Nav2 uses a conservative rectangular Go2 footprint including leg sweep,
-footprint padding and a wider inflation band. A bounded TF retry queue holds a
+The active-perception gate rejects stale path, uncertainty-cloud and IMU data,
+uses sensor-data QoS for IMU, and has a steady-clock 250 ms command watchdog.
+`nav_goal_bridge_node` keeps at most one accepted Nav2 goal and one latest
+pending goal; newer goals explicitly cancel older ones, with retries, timeout
+events and result de-duplication published on `/nav_goal_bridge/status`.
+
+Nav2 uses a conservative rectangular quadruped footprint including leg sweep,
+footprint padding and a wider inflation band. Its current padded envelope also
+covers the Lite3 standing body dimensions from the product manual, but the
+actual stance and leg sweep still require a low-speed physical check. A bounded TF retry queue holds a
 synchronized semantic frame briefly when its historical transform is late;
 the mapper still never substitutes the latest pose for a missing historical
 transform.
 
 ## Python runtime dependencies
 
-Install these Python packages in the ROS environment used to run the nodes:
+Install the compatible numerical/model set instead of upgrading packages one
+by one. Install the platform-specific Torch wheel first (desktop CUDA and
+JetPack use different builds), then:
 
 ```bash
-pip install numpy scipy torch open_clip_torch pillow transformers tokenizers
+python3 -m pip install --user -r requirements-segformer.txt
+# Only for the CLIP comparison backend:
+python3 -m pip install --user -r requirements-clip.txt
 ```
+
+`requirements-runtime-common.txt` deliberately pairs NumPy 1.26.4 with SciPy
+1.11.4. The current machine's system SciPy 1.8/NumPy 1.26 combination emits a
+compatibility warning and must not be used for final quantitative experiments.
+`setup.py` declares runtime package names but leaves exact pins in the
+requirements files so an offline `colcon build` never replaces the host Python
+environment implicitly.
 
 The ROS package dependencies are declared in `package.xml`. The three runtime parameter presets are:
 
@@ -70,10 +116,25 @@ The ROS package dependencies are declared in `package.xml`. The three runtime pa
 - `config/semantic_mapping_sim_livox.yaml`
 - `config/semantic_mapping_lite3_real.yaml`
 - `config/fast_lio_lite3_offline.yaml`
+- `config/fast_lio_lite3_real.yaml`
 
-The Lite3 preset disables feature-only query fallback. Its camera calibration,
-LiDAR-to-camera transform and command bridge still need to be replaced with
-measured values before real-robot trials.
+The Lite3 semantic preset selects SegFormer, requires the matching runtime
+`CameraInfo`, disables feature-only query fallback, and deliberately keeps
+`projection_calibration_verified: false`. In that state it may build a debug
+semantic map but will not publish object or navigation poses. The real FAST-LIO
+preset is a candidate for controlled moving-data validation; the offline preset
+remains the only one used by the static smoke runner. Measured LiDAR-to-camera
+extrinsics, a single authoritative odometry/TF source, and a vendor SDK safety
+bridge are still required before motion trials.
+
+Use `nav_sim.launch.py` for Gazebo (`use_sim_time=true`, `/odom`, simulation
+profile) and `nav_lite3_real.launch.py` for Lite3 (`use_sim_time=false`,
+`/Odometry`, fail-closed real profile). The generic
+`nav_with_remap.launch.py` remains an advanced entry point and now defaults to
+wall time because its default profile is Lite3. The Lite3 preset writes only
+`/cmd_vel_lite3_safe`; a watchdog-protected vendor bridge must be its sole
+consumer and sole SDK command writer. Goal forwarding is disabled by default
+in the Lite3 wrapper until calibration and that bridge pass acceptance.
 
 ## Lite3 sensor capture
 
@@ -118,19 +179,43 @@ available offline.
 
 ## SegFormer fusion backend
 
-`segformer_node` preserves the source image header and publishes a 12-class
-mask, per-pixel confidence, RGB preview and the source frame used for color
-attributes:
+### Offline image inspection
 
-- `/segformer/class_mask` (`mono8`, values `0..11`)
+The same SegFormer checkpoint and project-class mapping can be run on one
+local image without starting ROS or publishing navigation commands:
+
+```bash
+ros2 run semantic_mapping segformer_image \
+  --image /path/to/image.jpg \
+  --device cuda \
+  --overlay /tmp/image_segformer_overlay.png \
+  --json /tmp/image_segformer.json
+```
+
+The command prints the dominant project classes and their pixel fractions and
+optionally writes a color overlay and a JSON report. The stock Cityscapes
+checkpoint has no native `electric_bicycle` class; an e-bike will therefore
+not be reliably separated from bicycle/motorcycle until a trained checkpoint
+is selected.
+
+`segformer_node` preserves the source image header and publishes the complete
+13-class project posterior at native decoder resolution. It also retains the
+historical raw-argmax-mapped class mask, raw maximum confidence and RGB
+products for visualization and an exact legacy regression baseline:
+
+- `/segformer/project_posterior` (`16FC13`, native-resolution FP16 probabilities)
+- `/segformer/class_mask` (`mono8`, values `0..12`)
 - `/segformer/confidence` (`32FC1`)
 - `/segformer/color_mask` (`rgb8`)
 - `/segformer/source_image` (`rgb8`)
 
 GA-BSVM accepts `semantic_backend=clip` (the default) or
-`semantic_backend=segformer`. In SegFormer mode it synchronizes the class mask,
-confidence image and point cloud by their source timestamps. Run the M2DGR
-SegFormer fusion path with two nodes:
+`semantic_backend=segformer`. In the default SegFormer mode it synchronizes the
+atomic posterior grid, source RGB and point cloud by source timestamps, samples
+the low-resolution posterior at projected LiDAR pixels, and fuses the complete
+distribution. Set `segformer_use_full_posterior:=false` only to reproduce the
+legacy hard-mask plus maximum-confidence baseline. Run the M2DGR SegFormer
+fusion path with two nodes:
 
 ```bash
 ros2 run semantic_mapping segformer_node --ros-args \
@@ -142,8 +227,9 @@ ros2 run semantic_mapping ga_bsvm_node --ros-args \
 ```
 
 `clip_node` is not required in this mode. The configured classes are `road`,
-`building`, `tree`, `person`, `car`, `truck`, `bus`, `bicycle`, `motorcycle`,
-`chair`, `bench`, and `unknown background`. Common aliases such as `bike` and
+`building`, `tree`, `person`, `car`, `truck`, `bus`, `bicycle`,
+`electric_bicycle`, `motorcycle`, `chair`, `bench`, and `unknown background`.
+Common aliases such as `bike`, `electric bike`, `e-bike`, `电动车` and
 `pedestrian` are accepted. GA-BSVM queries the fused categorical posterior,
 publishes `/query_target_pose`, and then publishes the safe approach
 `/goal_pose`. Use the CLIP backend when arbitrary open-vocabulary text outside
@@ -157,13 +243,26 @@ complete instance. This prevents a white headlight on a red vehicle from being
 treated as a white vehicle. It remains a lightweight attribute path and does not
 replace instance segmentation for overlapping objects or complex descriptions.
 
-The default Cityscapes model maps road/sidewalk to `road`, structural labels to
-`building`, vegetation to `tree`, person/rider to `person`, and keeps car,
-truck, bus, bicycle and motorcycle separate. Classes absent from Cityscapes,
-including chair and bench, plus predictions below the confidence threshold,
-map to `unknown background`. Use the CLIP backend for those open-vocabulary
+The default Cityscapes model sums road/sidewalk probability into `road`,
+structural-label probability into `building`, vegetation into `tree`, and
+person/rider into `person`, while keeping car, truck, bus, bicycle and
+motorcycle separate. This aggregation occurs before hard classification and
+therefore preserves probability mass and class competition. The stock model
+has no electric-bicycle output,
+so `electric_bicycle` queries fail closed with the stock checkpoint. At startup
+the node prints the navigation classes supported by the selected checkpoint. A
+fine-tuned SegFormer whose `id2label` contains `electric_bicycle`,
+`electric bicycle`, `electric bike`, `e-bike` or `ebike` plugs into the same 13-class
+navigation chain without another schema change. Other classes absent from the
+checkpoint, plus predictions below the confidence threshold, map to `unknown
+background`. Use the CLIP backend for arbitrary open-vocabulary
 queries. The Lite3 preset requests CUDA FP16; final deployment should use an
 ONNX/TensorRT engine built for the robot's JetPack and TensorRT versions.
+
+The paired-mask dataset format, 13-class classifier initialization, training,
+acceptance check and runtime commands for actual electric-bicycle recognition
+are documented in
+[docs/SEGFORMER_EBIKE_FINETUNE.md](docs/SEGFORMER_EBIKE_FINETUNE.md).
 
 ## Gazebo semantic benchmark
 
@@ -194,7 +293,8 @@ PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python3 -m pytest \
   test/test_nav_goal_bridge.py \
   test/test_segformer_mapping.py test/test_semantic_schema.py \
   test/test_lite3_capture_validation.py
-python3 -m py_compile semantic_mapping/*.py launch/*.py
+python3 -m py_compile semantic_mapping/runtime/*.py \
+  semantic_mapping/carla/*.py launch/*.py
 bash -n scripts/record_lite3_sensors.sh
 colcon build --symlink-install --packages-select semantic_mapping
 ```

@@ -1,20 +1,54 @@
 import numpy as np
 
-from semantic_mapping.ga_bsvm_node import (
+from semantic_mapping.runtime.ga_bsvm_node import (
     GABsvmNode,
     normalize_frame_id,
     resolve_pointcloud_frame,
     segmentation_to_logits,
 )
-from semantic_mapping.segformer_node import (
+from semantic_mapping.runtime.segformer_node import (
     build_project_lookup,
     convert_image_to_rgb,
     find_relevant_model_labels,
+    find_supported_project_classes,
     raw_prediction_statistics,
     split_model_label,
+    verify_local_training_checkpoint,
 )
-from semantic_mapping.semantic_schema import DEFAULT_CLASSES
-from semantic_mapping.voxel_map import VoxelMap
+from semantic_mapping.runtime.semantic_schema import DEFAULT_CLASSES
+from semantic_mapping.runtime.voxel_map import VoxelMap
+
+
+def test_local_training_checkpoint_hash_is_enforced(tmp_path):
+    checkpoint = tmp_path / 'best'
+    checkpoint.mkdir()
+    (checkpoint / 'config.json').write_text('{}', encoding='utf-8')
+
+    from semantic_mapping.runtime.segformer_training import checkpoint_integrity
+
+    digest = checkpoint_integrity(checkpoint)['aggregate_sha256']
+    verified, detail = verify_local_training_checkpoint(
+        checkpoint, {'checkpoint_sha256': digest})
+    assert verified is True
+    assert detail == digest
+
+    (checkpoint / 'config.json').write_text(
+        '{"changed": true}', encoding='utf-8')
+    verified, detail = verify_local_training_checkpoint(
+        checkpoint, {'checkpoint_sha256': digest})
+    assert verified is False
+    assert 'hash mismatch' in detail
+
+
+def test_local_training_checkpoint_requires_recorded_hash(tmp_path):
+    checkpoint = tmp_path / 'best'
+    checkpoint.mkdir()
+    (checkpoint / 'config.json').write_text('{}', encoding='utf-8')
+
+    verified, detail = verify_local_training_checkpoint(checkpoint, {})
+
+    assert verified is False
+    assert detail == 'training report has no checkpoint_sha256'
 
 
 def test_segformer_labels_map_to_navigation_classes():
@@ -33,10 +67,21 @@ def test_segformer_labels_map_to_navigation_classes():
         11: 'sky',
     })
 
-    assert np.array_equal(
-        lookup,
-        np.asarray([1, 0, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]),
-    )
+    class_index = {name: index for index, name in enumerate(DEFAULT_CLASSES)}
+    assert np.array_equal(lookup, np.asarray([
+        class_index['building'],
+        class_index['road'],
+        class_index['tree'],
+        class_index['person'],
+        class_index['car'],
+        class_index['truck'],
+        class_index['bus'],
+        class_index['bicycle'],
+        class_index['motorcycle'],
+        class_index['chair'],
+        class_index['bench'],
+        class_index['unknown background'],
+    ]))
 
 
 def test_cityscapes_labels_map_to_navigation_classes():
@@ -72,7 +117,46 @@ def test_compound_ade20k_label_maps_to_car():
     })
 
     assert 'car' in split_model_label(compound_label)
-    assert lookup.tolist() == [1, 4, 4, 11]
+    class_index = {name: index for index, name in enumerate(DEFAULT_CLASSES)}
+    assert lookup.tolist() == [
+        class_index['building'],
+        class_index['car'],
+        class_index['car'],
+        class_index['unknown background'],
+    ]
+
+
+def test_custom_segformer_checkpoint_can_expose_electric_bicycle():
+    class_index = {name: index for index, name in enumerate(DEFAULT_CLASSES)}
+    id2label = {
+        0: 'car',
+        1: 'bicycle',
+        2: 'electric_bicycle',
+        3: 'motorcycle',
+    }
+
+    lookup = build_project_lookup(id2label)
+    supported = find_supported_project_classes(id2label)
+
+    assert lookup.tolist() == [
+        class_index['car'],
+        class_index['bicycle'],
+        class_index['electric_bicycle'],
+        class_index['motorcycle'],
+    ]
+    assert supported == (
+        'car', 'bicycle', 'electric_bicycle', 'motorcycle')
+
+
+def test_stock_cityscapes_checkpoint_reports_no_electric_bicycle_support():
+    supported = find_supported_project_classes({
+        13: 'car',
+        17: 'motorcycle',
+        18: 'bicycle',
+    })
+
+    assert supported == ('car', 'bicycle', 'motorcycle')
+    assert 'electric_bicycle' not in supported
 
 
 def test_relevant_model_labels_report_original_ade20k_ids():
@@ -148,7 +232,8 @@ def test_segmentation_confidence_becomes_categorical_probabilities():
 
     assert np.isclose(probabilities[0, 4], 0.8, atol=1e-6)
     assert np.isclose(probabilities[1, 7], 0.8, atol=1e-6)
-    assert np.isclose(probabilities[2, 11], 0.8, atol=1e-6)
+    unknown = DEFAULT_CLASSES.index('unknown background')
+    assert np.isclose(probabilities[2, unknown], 0.8, atol=1e-6)
     np.testing.assert_allclose(probabilities.sum(axis=1), 1.0, atol=1e-6)
 
 

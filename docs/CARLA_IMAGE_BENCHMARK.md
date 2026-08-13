@@ -16,7 +16,7 @@
 负责生成 RGB、语义真值和实例真值；同一份离线数据分别送入 CLIP 和 SegFormer，
 从而避免场景和时间差造成不公平比较。
 
-SegFormer 是闭集像素分类器，本项目默认只映射 12 类。CLIP 是开放词汇模型，但当前
+SegFormer 是闭集像素分类器，本项目默认映射 13 类。CLIP 是开放词汇模型，但当前
 自动评分覆盖 CARLA 能提供真值的 road、person、car、truck、bus、bicycle、
 motorcycle 和车辆颜色。
 

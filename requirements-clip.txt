@@ -1,0 +1,4 @@
+# OpenCLIP comparison backend. Install the platform-specific Torch build first.
+-r requirements-runtime-common.txt
+
+open_clip_torch==3.3.0

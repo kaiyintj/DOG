@@ -16,30 +16,62 @@ setup(
         (os.path.join('share', package_name, 'config'), glob('config/*.yaml')),
         (os.path.join('share', package_name, 'launch'), glob('launch/*.py')),
     ],
-    install_requires=['setuptools'],
+    install_requires=[
+        'setuptools',
+        # Exact compatible versions live in requirements-runtime-common.txt.
+        # Keep ROS/colcon metadata non-pinning so an offline build never tries
+        # to replace the platform Python environment implicitly.
+        'numpy',
+        'scipy',
+        'Pillow',
+        'PyYAML',
+    ],
     zip_safe=True,
     maintainer='yk',
     maintainer_email='yk@todo.todo',
     description='Semantic mapping and active perception nodes for ROS 2 navigation.',
     license='Apache-2.0',
     extras_require={
+        'clip': [
+            'open_clip_torch==3.3.0',
+            'torch>=2.0',
+        ],
+        'segformer': [
+            'huggingface-hub==0.36.0',
+            'Pillow>=9,<13',
+            'tokenizers==0.20.3',
+            'torch>=2.0',
+            'transformers==4.46.3',
+        ],
         'test': [
             'pytest',
         ],
     },
     entry_points={
         'console_scripts': [
-            'clip_node = semantic_mapping.clip_node:main',
-            'segformer_node = semantic_mapping.segformer_node:main',
-            'ga_bsvm_node = semantic_mapping.ga_bsvm_node:main',
+            'clip_node = semantic_mapping.runtime.clip_node:main',
+            'segformer_node = semantic_mapping.runtime.segformer_node:main',
+            'segformer_image = semantic_mapping.runtime.segformer_image:main',
+            'segformer_dataset = '
+            'semantic_mapping.runtime.segformer_training:dataset_main',
+            'segformer_finetune = '
+            'semantic_mapping.runtime.segformer_training:finetune_main',
+            'segformer_checkpoint = '
+            'semantic_mapping.runtime.segformer_training:checkpoint_main',
+            'ga_bsvm_node = semantic_mapping.runtime.ga_bsvm_node:main',
             'nav_goal_bridge_node = '
-            'semantic_mapping.nav_goal_bridge_node:main',
-            'active_perception_node = semantic_mapping.active_perception_node:main',
-            'clip_query = semantic_mapping.clip_query:main',
+            'semantic_mapping.runtime.nav_goal_bridge_node:main',
+            'active_perception_node = '
+            'semantic_mapping.runtime.active_perception_node:main',
+            'clip_query = semantic_mapping.runtime.clip_query:main',
             'carla_capture_benchmark = '
-            'semantic_mapping.carla_capture_benchmark:main',
+            'semantic_mapping.carla.carla_capture_benchmark:main',
             'carla_evaluate_benchmark = '
-            'semantic_mapping.carla_evaluate_benchmark:main',
+            'semantic_mapping.carla.carla_evaluate_benchmark:main',
+            'carla_capture_reliability = '
+            'semantic_mapping.carla.carla_capture_reliability:main',
+            'carla_evaluate_reliability = '
+            'semantic_mapping.carla.carla_evaluate_reliability:main',
         ],
     },
 )

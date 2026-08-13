@@ -1,6 +1,6 @@
 import numpy as np
 
-from semantic_mapping.semantic_schema import (
+from semantic_mapping.runtime.semantic_schema import (
     DEFAULT_CLASSES,
     color_membership_score,
     parse_semantic_query,
@@ -14,6 +14,29 @@ def test_bicycle_and_color_query_are_parsed():
 
     assert DEFAULT_CLASSES[class_index] == 'bicycle'
     assert color_name == 'blue'
+
+
+def test_electric_bicycle_query_beats_shorter_bicycle_alias():
+    for query in (
+        'electric bicycle',
+        'electric bike',
+        'e-bike',
+        '电动自行车',
+        '电动车',
+    ):
+        class_index, color_name = parse_semantic_query(
+            query, DEFAULT_CLASSES)
+
+        assert DEFAULT_CLASSES[class_index] == 'electric_bicycle'
+        assert color_name is None
+
+
+def test_motorcycle_and_car_queries_remain_distinct():
+    motorcycle_index, _ = parse_semantic_query('电动摩托车', DEFAULT_CLASSES)
+    car_index, _ = parse_semantic_query('汽车', DEFAULT_CLASSES)
+
+    assert DEFAULT_CLASSES[motorcycle_index] == 'motorcycle'
+    assert DEFAULT_CLASSES[car_index] == 'car'
 
 
 def test_chinese_color_car_query_is_parsed():
