@@ -239,10 +239,35 @@ def _imu_blueprint(library, args):
     return blueprint
 
 
+def _blueprint_attribute_value(attribute):
+    type_name = str(attribute.type).split('.')[-1]
+
+    if type_name == 'Bool':
+        return 'true' if attribute.as_bool() else 'false'
+
+    if type_name == 'Int':
+        return str(attribute.as_int())
+
+    if type_name == 'Float':
+        return repr(float(attribute.as_float()))
+
+    if type_name == 'String':
+        return attribute.as_str()
+
+    if type_name == 'RGBColor':
+        color = attribute.as_color()
+        return f'{int(color.r)},{int(color.g)},{int(color.b)}'
+
+    raise RuntimeError(
+        f'Unsupported CARLA ActorAttribute type '
+        f'{attribute.type!s} for {attribute.id}'
+    )
+
+
 def _blueprint_attributes(blueprint):
     return {
-        str(name): str(value)
-        for name, value in blueprint.attributes.items()
+        str(attribute.id): _blueprint_attribute_value(attribute)
+        for attribute in blueprint
     }
 
 
@@ -275,25 +300,89 @@ def _motion_profile(args):
 
 def _apply_ego_motion(carla, ego, profile, args):
     if profile == 'stationary':
-        ego.set_target_velocity(carla.Vector3D())
         ego.set_target_angular_velocity(carla.Vector3D())
         ego.apply_control(carla.VehicleControl(
             throttle=0.0,
             brake=1.0,
             hand_brake=True,
         ))
+
     elif profile == 'constant_velocity':
+        target_speed = float(args.ego_speed)
+
+        # Initialize the vehicle at the target speed only once.
+        if not hasattr(args, '_cv_initialized'):
+            forward = ego.get_transform().get_forward_vector()
+
+            ego.set_target_velocity(carla.Vector3D(
+                x=forward.x * target_speed,
+                y=forward.y * target_speed,
+                z=forward.z * target_speed,
+            ))
+
+            ego.set_target_angular_velocity(carla.Vector3D())
+            args._cv_initialized = True
+            args._cv_throttle = 0.0
+            return
+
+        # Current longitudinal speed.
         forward = ego.get_transform().get_forward_vector()
-        speed = float(args.ego_speed)
-        ego.set_target_velocity(carla.Vector3D(
-            x=forward.x * speed,
-            y=forward.y * speed,
-            z=forward.z * speed,
+        velocity = ego.get_velocity()
+
+        speed = (
+            velocity.x * forward.x +
+            velocity.y * forward.y +
+            velocity.z * forward.z
+        )
+
+        error = target_speed - speed
+
+        # Smooth low-gain speed controller.
+        desired_throttle = float(np.clip(
+            0.10 + 0.15 * error,
+            0.0,
+            0.35,
         ))
+
+        previous_throttle = float(args._cv_throttle)
+
+        throttle = previous_throttle + float(np.clip(
+            desired_throttle - previous_throttle,
+            -0.01,
+            0.01,
+        ))
+
+        args._cv_throttle = throttle
+
+        ego.apply_control(carla.VehicleControl(
+            throttle=throttle,
+            steer=0.0,
+            brake=0.0,
+            hand_brake=False,
+        ))
+
+        ego.set_target_angular_velocity(carla.Vector3D())
+
     elif profile == 'turning':
+        if not hasattr(args, '_turning_initialized'):
+            forward = ego.get_transform().get_forward_vector()
+            initial_speed = 3.0
+
+            ego.set_target_velocity(carla.Vector3D(
+                x=forward.x * initial_speed,
+                y=forward.y * initial_speed,
+                z=forward.z * initial_speed,
+            ))
+
+            ego.set_target_angular_velocity(carla.Vector3D())
+            args._turning_initialized = True
+            return
+
         ego.apply_control(carla.VehicleControl(
             throttle=float(args.ego_throttle),
             steer=float(args.ego_steer),
+            brake=0.0,
+            hand_brake=False,
         ))
 
 

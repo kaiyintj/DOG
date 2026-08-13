@@ -42,6 +42,7 @@ from semantic_mapping.runtime.reliability_factors import (
     compute_normalized_view_radius,
     compute_range_reliability,
     compute_semantic_reliability,
+    compute_temporal_motion_reliability,
     compute_view_reliability,
 )
 from semantic_mapping.carla.reliability_voxel_ablation import (
@@ -60,7 +61,7 @@ from semantic_mapping.runtime.semantic_schema import DEFAULT_CLASSES
 from semantic_mapping.runtime.segformer_training import checkpoint_integrity
 
 
-RELIABILITY_SCHEMA_VERSION = 1
+RELIABILITY_SCHEMA_VERSION = 2
 CARLA_TO_OPTICAL = np.asarray([
     [0.0, 1.0, 0.0, 0.0],
     [0.0, 0.0, -1.0, 0.0],
@@ -72,6 +73,8 @@ REQUIRED_RELIABILITY_PARAMETERS = (
     'imu_window_sec',
     'motion_angular_scale',
     'motion_accel_scale',
+    'motion_rotation_scale_rad',
+    'motion_translation_scale_m',
     'motion_min_reliability',
     'motion_missing_reliability',
     'imu_gravity',
@@ -113,6 +116,41 @@ def carla_lidar_to_optical_transform(lidar_to_world, camera_to_world):
     except np.linalg.LinAlgError as exc:
         raise ValueError('camera_to_world must be invertible') from exc
     return CARLA_TO_OPTICAL @ world_to_camera @ lidar_to_world
+
+
+def _nearest_rotation(rotation):
+    """Project a finite 3 x 3 matrix onto SO(3)."""
+    rotation = np.asarray(rotation, dtype=np.float64)
+    if rotation.shape != (3, 3) or not np.all(np.isfinite(rotation)):
+        raise ValueError('rotation must be a finite 3 x 3 matrix')
+    left, _singular_values, right = np.linalg.svd(rotation)
+    projected = left @ right
+    if np.linalg.det(projected) < 0.0:
+        left[:, -1] *= -1.0
+        projected = left @ right
+    return projected
+
+
+def relative_pose_motion(reference_to_world, historical_to_world):
+    """Return camera rotation angle and translation between two timestamps."""
+    reference_to_world = np.asarray(reference_to_world, dtype=np.float64)
+    historical_to_world = np.asarray(historical_to_world, dtype=np.float64)
+    if (
+        reference_to_world.shape != (4, 4)
+        or historical_to_world.shape != (4, 4)
+        or not np.all(np.isfinite(reference_to_world))
+        or not np.all(np.isfinite(historical_to_world))
+    ):
+        raise ValueError('camera poses must be finite 4 x 4 matrices')
+    reference_rotation = _nearest_rotation(reference_to_world[:3, :3])
+    historical_rotation = _nearest_rotation(historical_to_world[:3, :3])
+    relative_rotation = reference_rotation.T @ historical_rotation
+    cosine = np.clip(
+        0.5 * (np.trace(relative_rotation) - 1.0), -1.0, 1.0)
+    rotation_rad = float(np.arccos(cosine))
+    translation_m = float(np.linalg.norm(
+        historical_to_world[:3, 3] - reference_to_world[:3, 3]))
+    return rotation_rad, translation_m
 
 
 def load_reliability_parameters(path):
@@ -160,6 +198,15 @@ def load_reliability_parameters(path):
         raise ValueError(
             f'Benchmark ontology has {len(DEFAULT_CLASSES)} classes but '
             f'num_classes={result["num_classes"]}')
+    for name in (
+        'motion_rotation_scale_rad',
+        'motion_translation_scale_m',
+    ):
+        if not np.isfinite(result[name]) or result[name] <= 0.0:
+            raise ValueError(f'Reliability parameter {name} must be positive')
+    if not 0.0 <= result['motion_min_reliability'] <= 1.0:
+        raise ValueError(
+            'Reliability parameter motion_min_reliability must lie in [0, 1]')
     if result['max_observation_weight'] <= 0.0:
         result['max_observation_weight'] = None
     return result
@@ -348,12 +395,20 @@ def build_factor_summary(chunks):
          np.linspace(0.0, 1.0, 6)),
         ('motion', 'reliability', 'r_motion', 'r_motion',
          reliability_edges),
-        ('motion', 'angular_rms', 'angular_rms', 'r_motion',
-         np.asarray([0, 0.25, 0.5, 1, 2, 4, np.inf])),
-        ('motion', 'accel_deviation', 'accel_deviation', 'r_motion',
-         np.asarray([0, 0.25, 0.5, 1, 2, 4, 8, np.inf])),
+        ('motion', 'relative_rotation_rad', 'relative_rotation_rad',
+         'r_motion', np.asarray([0, 0.001, 0.0025, 0.005, 0.01,
+                                 0.02, 0.05, np.inf])),
+        ('motion', 'relative_translation_m', 'relative_translation_m',
+         'r_motion', np.asarray([0, 0.02, 0.05, 0.1, 0.25, 0.5,
+                                 1.0, np.inf])),
         ('motion', 'time_offset_ms', 'requested_offset_ms', 'r_motion',
          np.asarray([-0.5, 10, 35, 75, 125, np.inf])),
+        ('motion_v1_diagnostic', 'reliability', 'r_motion_v1',
+         'r_motion_v1', reliability_edges),
+        ('motion_v1_diagnostic', 'angular_rms', 'angular_rms',
+         'r_motion_v1', np.asarray([0, 0.25, 0.5, 1, 2, 4, np.inf])),
+        ('motion_v1_diagnostic', 'accel_deviation', 'accel_deviation',
+         'r_motion_v1', np.asarray([0, 0.25, 0.5, 1, 2, 4, 8, np.inf])),
         ('combined', 'reliability', 'r_combined', 'r_combined',
          reliability_edges),
     )
@@ -373,8 +428,7 @@ def build_factor_summary(chunks):
             brier,
         ))
 
-    # Motion and time offset are deliberately reported jointly.  Offset does
-    # not enter r_motion; these strata reveal whether that omission matters.
+    # Report Motion V2 separately for every requested temporal offset.
     motion = _concatenate_chunks(chunks, 'r_motion')
     for offset in sorted(np.unique(offsets[np.isfinite(offsets)])):
         selected = np.isclose(offsets, offset, rtol=0.0, atol=1e-9)
@@ -674,6 +728,30 @@ def _append_distance_sample(storage, distances, limit=200000):
     storage.extend(float(value) for value in distances)
 
 
+def _motion_offset_report(counter):
+    """Return per-frame Motion V1/V2 pose diagnostics for one offset."""
+    count = int(counter.get('motion_pose_frames', 0))
+    if count <= 0:
+        return {
+            'frame_count': 0,
+            'mean_relative_rotation_rad': None,
+            'mean_relative_translation_m': None,
+            'mean_motion_v2_reliability': None,
+            'mean_motion_v1_reliability_diagnostic': None,
+        }
+    return {
+        'frame_count': count,
+        'mean_relative_rotation_rad': float(
+            counter['relative_rotation_rad_sum'] / count),
+        'mean_relative_translation_m': float(
+            counter['relative_translation_m_sum'] / count),
+        'mean_motion_v2_reliability': float(
+            counter['motion_v2_reliability_sum'] / count),
+        'mean_motion_v1_reliability_diagnostic': float(
+            counter['motion_v1_reliability_sum'] / count),
+    }
+
+
 def _build_parser():
     parser = argparse.ArgumentParser(
         description=(
@@ -872,6 +950,20 @@ def evaluate(args):
             motion = select_imu_motion(
                 imu_samples, lidar_timestamp, params)
             global_flow[f'imu_{motion["status"]}_frames'] += 1
+            reference_rgb = select_historical_frame(
+                rgb_index,
+                lidar_timestamp,
+                0.0,
+                args.frame_tolerance_ms,
+            )
+            if not reference_rgb.accepted:
+                global_flow[
+                    f'reference_rgb_rejected_{reference_rgb.reason}'
+                ] += 1
+                continue
+            reference_rgb_record = reference_rgb.frame
+            reference_camera_to_world = _sensor_matrix(
+                reference_rgb_record)
 
             if len(intensity) != len(normal_xyz) or len(channels) != len(
                 normal_xyz
@@ -892,10 +984,32 @@ def evaluate(args):
                     flow[f'rgb_rejected_{selected_rgb.reason}'] += 1
                     continue
                 rgb_record = selected_rgb.frame
+                historical_camera_to_world = _sensor_matrix(rgb_record)
+                relative_rotation_rad, relative_translation_m = (
+                    relative_pose_motion(
+                        reference_camera_to_world,
+                        historical_camera_to_world,
+                    )
+                )
+                temporal_motion_reliability = (
+                    compute_temporal_motion_reliability(
+                        relative_rotation_rad,
+                        relative_translation_m,
+                        params['motion_rotation_scale_rad'],
+                        params['motion_translation_scale_m'],
+                        params['motion_min_reliability'],
+                    )
+                )
+                flow['motion_pose_frames'] += 1
+                flow['relative_rotation_rad_sum'] += relative_rotation_rad
+                flow['relative_translation_m_sum'] += relative_translation_m
+                flow['motion_v2_reliability_sum'] += (
+                    temporal_motion_reliability)
+                flow['motion_v1_reliability_sum'] += motion['reliability']
                 posterior_grid, width, height = cache.get(rgb_record)
                 projection_transform = carla_lidar_to_optical_transform(
                     normal_to_world,
-                    _sensor_matrix(rgb_record),
+                    historical_camera_to_world,
                 )
                 camera_matrix = camera_intrinsics(
                     width,
@@ -947,6 +1061,11 @@ def evaluate(args):
                 r_view = compute_view_reliability(
                     view_radius, params['view_edge_penalty'])
                 r_motion = np.full(
+                    len(valid_points),
+                    temporal_motion_reliability,
+                    dtype=np.float32,
+                )
+                r_motion_v1 = np.full(
                     len(valid_points),
                     motion['reliability'],
                     dtype=np.float32,
@@ -1142,6 +1261,13 @@ def evaluate(args):
                         'accel_deviation': motion[
                             'acceleration_deviation'],
                         'imu_status': motion['status'],
+                        'r_motion_v1': float(r_motion_v1[local_index]),
+                        'reference_rgb_frame': int(
+                            reference_rgb_record['frame']),
+                        'reference_rgb_timestamp': float(
+                            reference_rgb_record['timestamp_sec']),
+                        'relative_rotation_rad': relative_rotation_rad,
+                        'relative_translation_m': relative_translation_m,
                         'r_motion': float(r_motion[local_index]),
                         'r_density': float(r_density[local_index]),
                         'r_range': float(r_range[local_index]),
@@ -1177,6 +1303,7 @@ def evaluate(args):
                     'pred_confidence': pred_confidence,
                     'semantic_entropy': semantic_entropy[selected_local],
                     'r_motion': r_motion[selected_local],
+                    'r_motion_v1': r_motion_v1[selected_local],
                     'r_density': r_density[selected_local],
                     'r_range': r_range[selected_local],
                     'r_view': r_view[selected_local],
@@ -1190,6 +1317,10 @@ def evaluate(args):
                     'accel_deviation': np.full(
                         len(selected_local), motion[
                             'acceleration_deviation']),
+                    'relative_rotation_rad': np.full(
+                        len(selected_local), relative_rotation_rad),
+                    'relative_translation_m': np.full(
+                        len(selected_local), relative_translation_m),
                     'nll': nll,
                     'brier': brier,
                     'requested_offset_ms': np.full(
@@ -1252,9 +1383,16 @@ def evaluate(args):
         }
 
     factor_relationships = {}
-    for name in (
-            'motion', 'density', 'range', 'view', 'semantic', 'combined'):
-        field = 'r_combined' if name == 'combined' else f'r_{name}'
+    factor_fields = {
+        'motion': 'r_motion',
+        'motion_v1_diagnostic': 'r_motion_v1',
+        'density': 'r_density',
+        'range': 'r_range',
+        'view': 'r_view',
+        'semantic': 'r_semantic',
+        'combined': 'r_combined',
+    }
+    for name, field in factor_fields.items():
         values = (
             _concatenate_chunks(summary_chunks, field)
             if summary_chunks else np.empty(0))
@@ -1302,8 +1440,11 @@ def evaluate(args):
             'Voxel ablation includes a moving ego or moving targets; dynamic '
             'world-coordinate trails can confound reliability effects.')
     warnings.append(
-        'CARLA IMU gravity semantics must be verified with a stationary run '
-        'before interpreting motion reliability as real-robot evidence.')
+        'Motion V2 is a frame-level relative-pose risk prior, not measured '
+        'per-point reprojection error; its CARLA parameters are experimental.')
+    warnings.append(
+        'IMU Motion V1 is retained only as a diagnostic and does not enter '
+        'the full reliability product.')
     if not np.any(primary):
         warnings.append(
             'No supported point-level ground truth survived matching, '
@@ -1375,11 +1516,18 @@ def evaluate(args):
             'posterior_storage': args.posterior_storage,
             'summary_scope': 'deterministically sampled exported points',
             'voxel_eval': bool(args.voxel_eval),
+            'motion_weighting': 'temporal_relative_camera_pose_v2',
+            'motion_reference': (
+                'nearest accepted RGB frame to each LiDAR timestamp'),
         },
         'alignment': _aggregate_alignment(
             alignment_reports, distance_sample),
         'offset_flow': {
             f'{offset:g}': dict(offset_flow[offset]) for offset in offsets
+        },
+        'motion_by_offset_ms': {
+            f'{offset:g}': _motion_offset_report(offset_flow[offset])
+            for offset in offsets
         },
         'sample_flow': dict(global_flow),
         'imu_audit': {

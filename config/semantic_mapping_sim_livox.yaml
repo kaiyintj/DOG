@@ -153,12 +153,16 @@ ga_bsvm_node:
     imu_window_sec: 0.15
     motion_angular_scale: 2.0
     motion_accel_scale: 3.0
+    # Motion V2 validation parameters: camera-pose change between RGB/LiDAR
+    # timestamps. These are experimental, not frozen real-robot parameters.
+    motion_rotation_scale_rad: 0.05
+    motion_translation_scale_m: 2.0
     motion_min_reliability: 0.2
     motion_missing_reliability: 0.2
     imu_gravity: 9.81
     density_scale: 8.0
     range_scale_m: 20.0
-    view_edge_penalty: 0.4
+    view_edge_penalty: 0.0
     semantic_confidence_floor: 0.15
     camera_k: [457.02, 0.0, 320.0, 0.0, 457.02, 240.0, 0.0, 0.0, 1.0]
     lidar_to_camera_translation: [0.0, 0.06, -0.20]

@@ -127,6 +127,90 @@ def voxel_map_kwargs_from_params(
     }
 
 
+def _binary_auroc(labels, scores):
+    """
+    Compute binary AUROC without scipy/sklearn.
+
+    labels:
+        1 = wrong voxel
+        0 = correct voxel
+
+    scores:
+        voxel uncertainty
+
+    AUROC > 0.5 means larger uncertainty tends to identify errors.
+    """
+    labels = np.asarray(labels, dtype=np.int64).reshape(-1)
+    scores = np.asarray(scores, dtype=np.float64).reshape(-1)
+
+    finite = np.isfinite(scores)
+    labels = labels[finite]
+    scores = scores[finite]
+
+    positive = labels == 1
+    negative = labels == 0
+
+    n_pos = int(np.sum(positive))
+    n_neg = int(np.sum(negative))
+
+    if n_pos == 0 or n_neg == 0:
+        return None
+
+    # Rank scores with average ranks for ties.
+    order = np.argsort(scores, kind='mergesort')
+    sorted_scores = scores[order]
+
+    ranks = np.empty(len(scores), dtype=np.float64)
+
+    i = 0
+    while i < len(scores):
+        j = i + 1
+
+        while (
+            j < len(scores)
+            and sorted_scores[j] == sorted_scores[i]
+        ):
+            j += 1
+
+        # 1-based average rank for [i, j)
+        average_rank = 0.5 * ((i + 1) + j)
+        ranks[order[i:j]] = average_rank
+
+        i = j
+
+    rank_sum_pos = float(np.sum(ranks[positive]))
+
+    auc = (
+        rank_sum_pos
+        - n_pos * (n_pos + 1) / 2.0
+    ) / (n_pos * n_neg)
+
+    return float(auc)
+
+
+def _binary_score_correlation(labels, scores):
+    """
+    Pearson correlation between voxel error and uncertainty.
+
+    Positive value:
+        wrong voxels tend to have higher uncertainty.
+    """
+    labels = np.asarray(labels, dtype=np.float64).reshape(-1)
+    scores = np.asarray(scores, dtype=np.float64).reshape(-1)
+
+    finite = np.isfinite(scores)
+    labels = labels[finite]
+    scores = scores[finite]
+
+    if len(labels) < 2:
+        return None
+
+    if np.std(labels) <= 1e-12 or np.std(scores) <= 1e-12:
+        return None
+
+    return float(np.corrcoef(labels, scores)[0, 1])
+
+
 class VoxelAblation:
     """
     Fuse identical observations into six runtime-equivalent voxel maps.
@@ -222,47 +306,212 @@ class VoxelAblation:
         """
         Return voxel-level accuracy and uncertainty for every ablation.
 
-        ``all_gt_accuracy`` uses *all* ground-truth voxels as denominator and
-        treats a GT voxel missing from an ablation map as incorrect.  In
-        contrast, ``covered_accuracy`` is conditional on a map voxel existing.
+        ``all_gt_accuracy`` uses all ground-truth voxels as denominator and
+        treats a GT voxel missing from an ablation map as incorrect.
+
+        ``covered_accuracy`` is conditional on a map voxel existing.
+
+        Uncertainty-error diagnostics are evaluated only on covered voxels,
+        because missing voxels have no posterior uncertainty.
         """
         gt_voxels = dict(self._ground_truth_counts)
         gt_count = len(gt_voxels)
+
         result = {}
+
         for name in ABLATION_NAMES:
             voxel_map = self.maps[name]
+
             covered = 0
             correct = 0
+
             entropies = []
             uncertainties = []
+
+            correct_entropies = []
+            wrong_entropies = []
+
+            correct_uncertainties = []
+            wrong_uncertainties = []
+
+            error_labels = []
+            uncertainty_scores = []
+
             for key, label_counts in gt_voxels.items():
                 if key not in voxel_map.voxels:
                     continue
+
                 covered += 1
+
                 gt_id = int(np.argmax(label_counts))
-                predicted_id = int(np.argmax(voxel_map.get_probabilities(key)))
-                correct += int(predicted_id == gt_id)
-                entropy, _epistemic, uncertainty = voxel_map.get_uncertainty(
-                    key)
-                entropies.append(float(entropy))
-                uncertainties.append(float(uncertainty))
+
+                predicted_id = int(
+                    np.argmax(voxel_map.get_probabilities(key))
+                )
+
+                is_correct = predicted_id == gt_id
+
+                if is_correct:
+                    correct += 1
+
+                entropy, _epistemic, uncertainty = (
+                    voxel_map.get_uncertainty(key)
+                )
+
+                entropy = float(entropy)
+                uncertainty = float(uncertainty)
+
+                entropies.append(entropy)
+                uncertainties.append(uncertainty)
+
+                if is_correct:
+                    correct_entropies.append(entropy)
+                    correct_uncertainties.append(uncertainty)
+                else:
+                    wrong_entropies.append(entropy)
+                    wrong_uncertainties.append(uncertainty)
+
+                # Error is the positive class.
+                error_labels.append(0 if is_correct else 1)
+                uncertainty_scores.append(uncertainty)
+
             missing = gt_count - covered
+            wrong = covered - correct
+
+            mean_entropy_correct = (
+                float(np.mean(correct_entropies))
+                if correct_entropies
+                else None
+            )
+
+            mean_entropy_wrong = (
+                float(np.mean(wrong_entropies))
+                if wrong_entropies
+                else None
+            )
+
+            mean_uncertainty_correct = (
+                float(np.mean(correct_uncertainties))
+                if correct_uncertainties
+                else None
+            )
+
+            mean_uncertainty_wrong = (
+                float(np.mean(wrong_uncertainties))
+                if wrong_uncertainties
+                else None
+            )
+
+            entropy_gap = (
+                float(mean_entropy_wrong - mean_entropy_correct)
+                if (
+                    mean_entropy_wrong is not None
+                    and mean_entropy_correct is not None
+                )
+                else None
+            )
+
+            uncertainty_gap = (
+                float(
+                    mean_uncertainty_wrong
+                    - mean_uncertainty_correct
+                )
+                if (
+                    mean_uncertainty_wrong is not None
+                    and mean_uncertainty_correct is not None
+                )
+                else None
+            )
+
+            uncertainty_error_auroc = _binary_auroc(
+                error_labels,
+                uncertainty_scores,
+            )
+
+            uncertainty_error_correlation = (
+                _binary_score_correlation(
+                    error_labels,
+                    uncertainty_scores,
+                )
+            )
+
             result[name] = {
                 'gt_voxel_count': int(gt_count),
+
                 'covered_voxel_count': int(covered),
                 'missing_voxel_count': int(missing),
-                # Short aliases make the report pleasant to consume from the
-                # benchmark JSON while retaining explicit CSV-style names.
+
+                'correct_voxel_count': int(correct),
+                'wrong_voxel_count': int(wrong),
+
+                # Short aliases retained for compatibility.
                 'covered': int(covered),
                 'missing': int(missing),
-                'coverage': float(covered / gt_count) if gt_count else None,
+
+                'coverage': (
+                    float(covered / gt_count)
+                    if gt_count
+                    else None
+                ),
+
                 'covered_accuracy': (
-                    float(correct / covered) if covered else None),
+                    float(correct / covered)
+                    if covered
+                    else None
+                ),
+
                 'all_gt_accuracy': (
-                    float(correct / gt_count) if gt_count else None),
+                    float(correct / gt_count)
+                    if gt_count
+                    else None
+                ),
+
+                # Overall uncertainty statistics.
                 'mean_entropy': (
-                    float(np.mean(entropies)) if entropies else None),
+                    float(np.mean(entropies))
+                    if entropies
+                    else None
+                ),
+
                 'mean_uncertainty': (
-                    float(np.mean(uncertainties)) if uncertainties else None),
+                    float(np.mean(uncertainties))
+                    if uncertainties
+                    else None
+                ),
+
+                # Correct-vs-wrong voxel diagnostics.
+                'mean_entropy_correct': (
+                    mean_entropy_correct
+                ),
+
+                'mean_entropy_wrong': (
+                    mean_entropy_wrong
+                ),
+
+                'entropy_gap_wrong_minus_correct': (
+                    entropy_gap
+                ),
+
+                'mean_uncertainty_correct': (
+                    mean_uncertainty_correct
+                ),
+
+                'mean_uncertainty_wrong': (
+                    mean_uncertainty_wrong
+                ),
+
+                'uncertainty_gap_wrong_minus_correct': (
+                    uncertainty_gap
+                ),
+
+                # Error detection metrics.
+                'uncertainty_error_auroc': (
+                    uncertainty_error_auroc
+                ),
+
+                'uncertainty_error_correlation': (
+                    uncertainty_error_correlation
+                ),
             }
+
         return result

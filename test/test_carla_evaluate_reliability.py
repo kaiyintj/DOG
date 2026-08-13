@@ -21,6 +21,7 @@ from semantic_mapping.carla.carla_evaluate_reliability import (
     carla_lidar_to_optical_transform,
     evaluate,
     load_reliability_parameters,
+    relative_pose_motion,
     select_imu_motion,
     validate_reliability_manifest,
 )
@@ -45,6 +46,8 @@ def _runtime_parameters():
         'imu_window_sec': 0.15,
         'motion_angular_scale': 2.0,
         'motion_accel_scale': 3.0,
+        'motion_rotation_scale_rad': 0.05,
+        'motion_translation_scale_m': 2.0,
         'motion_min_reliability': 0.2,
         'motion_missing_reliability': 0.2,
         'imu_gravity': 9.81,
@@ -128,6 +131,25 @@ def test_carla_transform_uses_the_historical_camera_pose():
     )
 
 
+def test_relative_pose_motion_reports_rotation_and_translation():
+    """Motion V2 uses the reference-to-historical camera pose change."""
+    reference = _matrix_with_translation(x=1.0, y=2.0, z=3.0)
+    historical = _matrix_with_translation(x=4.0, y=6.0, z=3.0)
+    angle = np.deg2rad(30.0)
+    historical[:3, :3] = [
+        [np.cos(angle), -np.sin(angle), 0.0],
+        [np.sin(angle), np.cos(angle), 0.0],
+        [0.0, 0.0, 1.0],
+    ]
+
+    rotation, translation = relative_pose_motion(reference, historical)
+
+    assert rotation == pytest.approx(angle)
+    assert translation == pytest.approx(5.0)
+    assert relative_pose_motion(reference, reference) == pytest.approx(
+        (0.0, 0.0))
+
+
 def test_load_parameters_reads_runtime_and_voxel_settings(tmp_path):
     """The evaluator must read factor and fusion parameters from GA-BSVM."""
     config_path = tmp_path / 'reliability.yaml'
@@ -137,6 +159,8 @@ def test_load_parameters_reads_runtime_and_voxel_settings(tmp_path):
 
     assert parameters['imu_window_sec'] == pytest.approx(0.15)
     assert parameters['motion_angular_scale'] == pytest.approx(2.0)
+    assert parameters['motion_rotation_scale_rad'] == pytest.approx(0.05)
+    assert parameters['motion_translation_scale_m'] == pytest.approx(2.0)
     assert parameters['density_scale'] == pytest.approx(8.0)
     assert parameters['range_scale_m'] == pytest.approx(20.0)
     assert parameters['voxel_size'] == pytest.approx(0.1)
@@ -250,6 +274,7 @@ def test_factor_summary_preserves_empty_bins_and_excludes_unsupported():
         'pred_confidence': np.asarray([0.9, 0.7, 0.2, 0.4]),
         'semantic_entropy': np.asarray([0.1, 0.5, 1.0, 0.7]),
         'r_motion': np.asarray([0.9, 0.8, 0.1, 0.4]),
+        'r_motion_v1': np.asarray([1.0, 0.9, 0.5, 0.7]),
         'r_density': np.asarray([0.9, 0.7, 0.1, 0.4]),
         'r_range': np.asarray([0.9, 0.6, 0.1, 0.4]),
         'r_view': np.asarray([0.9, 0.5, 0.1, 0.4]),
@@ -260,6 +285,8 @@ def test_factor_summary_preserves_empty_bins_and_excludes_unsupported():
         'view_radius': np.asarray([0.1, 0.3, 0.8, 0.5]),
         'angular_rms': np.asarray([0.0, 0.2, 2.0, 1.0]),
         'accel_deviation': np.asarray([0.0, 0.1, 1.0, 0.3]),
+        'relative_rotation_rad': np.asarray([0.0, 0.002, 0.01, 0.02]),
+        'relative_translation_m': np.asarray([0.0, 0.1, 0.5, 1.0]),
         'nll': np.asarray([0.1, 0.4, 3.0, 0.9]),
         'brier': np.asarray([0.02, 0.3, 1.5, 0.8]),
         'requested_offset_ms': np.asarray([0.0, 20.0, 50.0, 100.0]),
@@ -450,6 +477,13 @@ def test_evaluate_runs_end_to_end_on_a_minimal_offline_reliability_dataset(
         rows = list(reader)
     assert len(rows) == 2
     assert all(row['correct'] == '1' for row in rows)
+    assert all(float(row['r_motion']) == pytest.approx(1.0) for row in rows)
+    assert all(float(row['r_motion_v1']) == pytest.approx(1.0)
+               for row in rows)
+    assert all(float(row['relative_rotation_rad']) == pytest.approx(0.0)
+               for row in rows)
+    assert all(float(row['relative_translation_m']) == pytest.approx(0.0)
+               for row in rows)
     for row in rows:
         assert row['posterior_file']
         posterior_path = output / row['posterior_file']
@@ -476,6 +510,10 @@ def test_evaluate_runs_end_to_end_on_a_minimal_offline_reliability_dataset(
     assert report['overall']['accuracy'] == pytest.approx(1.0)
     assert report['alignment']['accepted_frame_count'] == 1
     assert report['alignment']['rejected_frame_count'] == 0
+    assert report['experiment']['motion_weighting'] == (
+        'temporal_relative_camera_pose_v2')
+    assert report['motion_by_offset_ms']['0'][
+        'mean_motion_v2_reliability'] == pytest.approx(1.0)
     assert set(report['ablation']['voxel_by_offset_ms']['0']) == {
         'none',
         'semantic',

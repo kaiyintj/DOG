@@ -10,6 +10,7 @@ from semantic_mapping.runtime.reliability_factors import (
     compute_normalized_view_radius,
     compute_range_reliability,
     compute_semantic_reliability,
+    compute_temporal_motion_reliability,
     compute_view_reliability,
 )
 from semantic_mapping.runtime.semantic_projection import (
@@ -40,6 +41,32 @@ def test_motion_reliability_clips_and_rejects_invalid_samples():
         compute_motion_reliability([], [], 2.0, 3.0, 9.81, 0.2)
     with pytest.raises(ValueError, match='equal length'):
         compute_motion_reliability([0.0], [9.81, 9.81], 2.0, 3.0, 9.81, 0.2)
+
+
+def test_temporal_motion_reliability_has_expected_analytic_values():
+    identity = compute_temporal_motion_reliability(
+        0.0, 0.0, 0.05, 2.0, 0.2)
+    rotation_scale = compute_temporal_motion_reliability(
+        0.05, 0.0, 0.05, 2.0, 0.2)
+    both_scales = compute_temporal_motion_reliability(
+        0.05, 2.0, 0.05, 2.0, 0.2)
+
+    assert identity == pytest.approx(1.0)
+    assert rotation_scale == pytest.approx(np.exp(-0.5))
+    assert both_scales == pytest.approx(np.exp(-1.0))
+
+
+def test_temporal_motion_reliability_clips_and_rejects_nonfinite_pose():
+    assert compute_temporal_motion_reliability(
+        10.0, 10.0, 0.05, 2.0, 0.2) == pytest.approx(0.2)
+    assert compute_temporal_motion_reliability(
+        -1.0, -1.0, 0.05, 2.0, 0.2) == pytest.approx(1.0)
+    with pytest.raises(ValueError, match='rotation'):
+        compute_temporal_motion_reliability(
+            np.nan, 0.0, 0.05, 2.0, 0.2)
+    with pytest.raises(ValueError, match='translation'):
+        compute_temporal_motion_reliability(
+            0.0, np.inf, 0.05, 2.0, 0.2)
 
 
 def test_density_counts_self_and_respects_three_dimensional_radius():

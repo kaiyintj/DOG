@@ -1,0 +1,849 @@
+{
+  "schema_version": 2,
+  "benchmark": "carla_reliability",
+  "created_local": "2026-08-13T23:31:00+0800",
+  "dataset": "/home/yk/ws/carla_benchmark_data/reliability_baseline_fixed_20260813_155014",
+  "output": "/home/yk/ws/carla_benchmark_data/reliability_baseline_fixed_20260813_155014/results/reliability_20260813_233037",
+  "dataset_id": "reliability_baseline_fixed_20260813_155014",
+  "git": {
+    "commit": "a187c7e534968ff7480572dd6950a8c0cfaece7a",
+    "dirty": true
+  },
+  "software": {
+    "python": "3.10.12",
+    "platform": "Linux-6.8.0-136-generic-x86_64-with-glibc2.35",
+    "numpy": "1.26.4",
+    "scipy": "1.8.0",
+    "pillow": "12.2.0",
+    "torch": "2.12.0.dev20260407+cu128",
+    "transformers": "4.46.3",
+    "cuda_runtime": "12.8",
+    "cuda_device": "NVIDIA GeForce RTX 5070 Laptop GPU"
+  },
+  "dataset_support": {
+    "format": "carla_reliability_v1",
+    "format_version": 1,
+    "carla_server_version": "0.9.16",
+    "carla_client_version": "0.9.16",
+    "town": "Carla/Maps/Town10HD_Opt",
+    "weather_preset": "ClearNoon",
+    "weather": {
+      "cloudiness": 5.0,
+      "precipitation": 0.0,
+      "precipitation_deposits": 0.0,
+      "wind_intensity": 10.0,
+      "sun_azimuth_angle": -1.0,
+      "sun_altitude_angle": 45.0,
+      "fog_density": 2.0,
+      "fog_distance": 0.75,
+      "fog_falloff": 0.10000000149011612,
+      "wetness": 0.0,
+      "scattering_intensity": 1.0,
+      "mie_scattering_scale": 0.029999999329447746,
+      "rayleigh_scattering_scale": 0.03310000151395798
+    },
+    "seed": 42,
+    "ego_motion_profile": "stationary",
+    "moving_targets": false,
+    "sensors": {
+      "rgb": {
+        "blueprint_id": "sensor.camera.rgb",
+        "attributes": {
+          "tint": "0.0",
+          "blur_amount": "1.0",
+          "min_fstop": "1.2000000476837158",
+          "chromatic_aberration_offset": "0.0",
+          "slope": "0.8799999952316284",
+          "focal_distance": "1000.0",
+          "exposure_speed_down": "1.0",
+          "exposure_speed_up": "3.0",
+          "motion_blur_min_object_screen_size": "0.10000000149011612",
+          "lens_flare_intensity": "0.10000000149011612",
+          "motion_blur_intensity": "0.44999998807907104",
+          "exposure_min_bright": "10.0",
+          "gamma": "2.200000047683716",
+          "blade_count": "5",
+          "enable_postprocess_effects": "true",
+          "calibration_constant": "16.0",
+          "exposure_compensation": "0.0",
+          "exposure_mode": "histogram",
+          "exposure_max_bright": "12.0",
+          "lens_x_size": "0.07999999821186066",
+          "chromatic_aberration_intensity": "0.0",
+          "lens_kcube": "0.0",
+          "fstop": "1.399999976158142",
+          "lens_k": "-1.0",
+          "toe": "0.550000011920929",
+          "motion_blur_max_distortion": "0.3499999940395355",
+          "lens_circle_multiplier": "0.0",
+          "bloom_intensity": "0.675000011920929",
+          "shutter_speed": "200.0",
+          "lens_circle_falloff": "5.0",
+          "temp": "6500.0",
+          "fov": "90.0",
+          "image_size_y": "480",
+          "white_clip": "0.03999999910593033",
+          "shoulder": "0.25999999046325684",
+          "image_size_x": "640",
+          "lens_y_size": "0.07999999821186066",
+          "sensor_tick": "0.009999999776482582",
+          "ros_publish_tf": "true",
+          "blur_radius": "0.0",
+          "ros_frame_id": "",
+          "iso": "100.0",
+          "ros_name": "",
+          "black_clip": "0.0",
+          "role_name": "front"
+        },
+        "attachment_transform_ego": {
+          "location_m": {
+            "x": 1.2999999523162842,
+            "y": 0.0,
+            "z": 1.649999976158142
+          },
+          "rotation_deg": {
+            "pitch": -5.0,
+            "yaw": 0.0,
+            "roll": 0.0
+          },
+          "matrix_local_to_world": [
+            [
+              0.9961947202682495,
+              -0.0,
+              0.08715573698282242,
+              1.2999999523162842
+            ],
+            [
+              0.0,
+              1.0,
+              0.0,
+              0.0
+            ],
+            [
+              -0.08715573698282242,
+              -0.0,
+              0.9961947202682495,
+              1.649999976158142
+            ],
+            [
+              0.0,
+              0.0,
+              0.0,
+              1.0
+            ]
+          ]
+        }
+      },
+      "semantic_camera": {
+        "blueprint_id": "sensor.camera.semantic_segmentation",
+        "attributes": {
+          "lens_x_size": "0.07999999821186066",
+          "lens_circle_multiplier": "0.0",
+          "lens_y_size": "0.07999999821186066",
+          "lens_kcube": "0.0",
+          "image_size_y": "480",
+          "lens_circle_falloff": "5.0",
+          "image_size_x": "640",
+          "lens_k": "-1.0",
+          "sensor_tick": "0.009999999776482582",
+          "fov": "90.0",
+          "ros_publish_tf": "true",
+          "ros_frame_id": "",
+          "ros_name": "",
+          "role_name": "front"
+        },
+        "attachment_transform_ego": {
+          "location_m": {
+            "x": 1.2999999523162842,
+            "y": 0.0,
+            "z": 1.649999976158142
+          },
+          "rotation_deg": {
+            "pitch": -5.0,
+            "yaw": 0.0,
+            "roll": 0.0
+          },
+          "matrix_local_to_world": [
+            [
+              0.9961947202682495,
+              -0.0,
+              0.08715573698282242,
+              1.2999999523162842
+            ],
+            [
+              0.0,
+              1.0,
+              0.0,
+              0.0
+            ],
+            [
+              -0.08715573698282242,
+              -0.0,
+              0.9961947202682495,
+              1.649999976158142
+            ],
+            [
+              0.0,
+              0.0,
+              0.0,
+              1.0
+            ]
+          ]
+        }
+      },
+      "instance_camera": {
+        "blueprint_id": "sensor.camera.instance_segmentation",
+        "attributes": {
+          "lens_x_size": "0.07999999821186066",
+          "lens_circle_multiplier": "0.0",
+          "lens_y_size": "0.07999999821186066",
+          "lens_kcube": "0.0",
+          "image_size_y": "480",
+          "lens_circle_falloff": "5.0",
+          "image_size_x": "640",
+          "lens_k": "-1.0",
+          "sensor_tick": "0.009999999776482582",
+          "fov": "90.0",
+          "ros_publish_tf": "true",
+          "ros_frame_id": "",
+          "ros_name": "",
+          "role_name": "front"
+        },
+        "attachment_transform_ego": {
+          "location_m": {
+            "x": 1.2999999523162842,
+            "y": 0.0,
+            "z": 1.649999976158142
+          },
+          "rotation_deg": {
+            "pitch": -5.0,
+            "yaw": 0.0,
+            "roll": 0.0
+          },
+          "matrix_local_to_world": [
+            [
+              0.9961947202682495,
+              -0.0,
+              0.08715573698282242,
+              1.2999999523162842
+            ],
+            [
+              0.0,
+              1.0,
+              0.0,
+              0.0
+            ],
+            [
+              -0.08715573698282242,
+              -0.0,
+              0.9961947202682495,
+              1.649999976158142
+            ],
+            [
+              0.0,
+              0.0,
+              0.0,
+              1.0
+            ]
+          ]
+        }
+      },
+      "lidar": {
+        "blueprint_id": "sensor.lidar.ray_cast",
+        "attributes": {
+          "dropoff_zero_intensity": "0.0",
+          "dropoff_intensity_limit": "1.0",
+          "dropoff_general_rate": "0.0",
+          "atmosphere_attenuation_rate": "0.004000000189989805",
+          "horizontal_fov": "360.0",
+          "rotation_frequency": "20.0",
+          "range": "50.0",
+          "noise_stddev": "0.0",
+          "lower_fov": "-30.0",
+          "upper_fov": "10.0",
+          "points_per_second": "600000",
+          "channels": "64",
+          "sensor_tick": "0.05000000074505806",
+          "ros_publish_tf": "true",
+          "ros_frame_id": "",
+          "ros_name": "",
+          "noise_seed": "42",
+          "role_name": "front"
+        },
+        "attachment_transform_ego": {
+          "location_m": {
+            "x": 1.2999999523162842,
+            "y": 0.0,
+            "z": 1.7999999523162842
+          },
+          "rotation_deg": {
+            "pitch": 0.0,
+            "yaw": 0.0,
+            "roll": 0.0
+          },
+          "matrix_local_to_world": [
+            [
+              1.0,
+              0.0,
+              -0.0,
+              1.2999999523162842
+            ],
+            [
+              0.0,
+              1.0,
+              0.0,
+              0.0
+            ],
+            [
+              0.0,
+              -0.0,
+              1.0,
+              1.7999999523162842
+            ],
+            [
+              0.0,
+              0.0,
+              0.0,
+              1.0
+            ]
+          ]
+        }
+      },
+      "semantic_lidar": {
+        "blueprint_id": "sensor.lidar.ray_cast_semantic",
+        "attributes": {
+          "horizontal_fov": "360.0",
+          "upper_fov": "10.0",
+          "rotation_frequency": "20.0",
+          "lower_fov": "-30.0",
+          "points_per_second": "600000",
+          "range": "50.0",
+          "sensor_tick": "0.05000000074505806",
+          "ros_publish_tf": "true",
+          "channels": "64",
+          "ros_frame_id": "",
+          "ros_name": "",
+          "role_name": "front"
+        },
+        "attachment_transform_ego": {
+          "location_m": {
+            "x": 1.2999999523162842,
+            "y": 0.0,
+            "z": 1.7999999523162842
+          },
+          "rotation_deg": {
+            "pitch": 0.0,
+            "yaw": 0.0,
+            "roll": 0.0
+          },
+          "matrix_local_to_world": [
+            [
+              1.0,
+              0.0,
+              -0.0,
+              1.2999999523162842
+            ],
+            [
+              0.0,
+              1.0,
+              0.0,
+              0.0
+            ],
+            [
+              0.0,
+              -0.0,
+              1.0,
+              1.7999999523162842
+            ],
+            [
+              0.0,
+              0.0,
+              0.0,
+              1.0
+            ]
+          ]
+        }
+      },
+      "imu": {
+        "blueprint_id": "sensor.other.imu",
+        "attributes": {
+          "noise_gyro_bias_y": "0.0",
+          "noise_gyro_bias_x": "0.0",
+          "noise_gyro_stddev_z": "0.0",
+          "noise_gyro_stddev_y": "0.0",
+          "noise_gyro_stddev_x": "0.0",
+          "noise_accel_stddev_z": "0.0",
+          "noise_accel_stddev_y": "0.0",
+          "noise_accel_stddev_x": "0.0",
+          "noise_seed": "42",
+          "sensor_tick": "0.009999999776482582",
+          "ros_publish_tf": "true",
+          "ros_frame_id": "",
+          "noise_gyro_bias_z": "0.0",
+          "ros_name": "",
+          "role_name": "default"
+        },
+        "attachment_transform_ego": {
+          "location_m": {
+            "x": 0.0,
+            "y": 0.0,
+            "z": 0.0
+          },
+          "rotation_deg": {
+            "pitch": 0.0,
+            "yaw": 0.0,
+            "roll": 0.0
+          },
+          "matrix_local_to_world": [
+            [
+              1.0,
+              0.0,
+              -0.0,
+              0.0
+            ],
+            [
+              0.0,
+              1.0,
+              0.0,
+              0.0
+            ],
+            [
+              0.0,
+              -0.0,
+              1.0,
+              0.0
+            ],
+            [
+              0.0,
+              0.0,
+              0.0,
+              1.0
+            ]
+          ]
+        }
+      }
+    }
+  },
+  "model": {
+    "id": "nvidia/segformer-b0-finetuned-cityscapes-1024-1024",
+    "requested_revision": null,
+    "resolved_revision": "21b3847fae21ddee674abd31129307b6a1235bd9",
+    "local_checkpoint_integrity": null,
+    "device": "cuda",
+    "fp16": true,
+    "posterior_temperature": 1.0,
+    "checkpoint_id2label": {
+      "0": "road",
+      "1": "sidewalk",
+      "2": "building",
+      "3": "wall",
+      "4": "fence",
+      "5": "pole",
+      "6": "traffic light",
+      "7": "traffic sign",
+      "8": "vegetation",
+      "9": "terrain",
+      "10": "sky",
+      "11": "person",
+      "12": "rider",
+      "13": "car",
+      "14": "truck",
+      "15": "bus",
+      "16": "train",
+      "17": "motorcycle",
+      "18": "bicycle"
+    },
+    "project_class_order": [
+      "road",
+      "building",
+      "tree",
+      "person",
+      "car",
+      "truck",
+      "bus",
+      "bicycle",
+      "electric_bicycle",
+      "motorcycle",
+      "chair",
+      "bench",
+      "unknown background"
+    ],
+    "supported_project_classes": [
+      "road",
+      "building",
+      "tree",
+      "person",
+      "car",
+      "truck",
+      "bus",
+      "bicycle",
+      "motorcycle"
+    ],
+    "checkpoint_unsupported_project_classes": [
+      "electric_bicycle",
+      "chair",
+      "bench"
+    ],
+    "native_posterior_cache_hits": 294,
+    "native_posterior_cache_misses": 199,
+    "posterior_transport": "native project posterior -> float16 -> float32 -> normalize"
+  },
+  "reliability_parameters": {
+    "source": "/home/yk/ws/src/semantic_mapping/config/semantic_mapping_sim_livox.yaml",
+    "source_sha256": "48b7401c47604523618ab7c757488a61fbbf23d8741982e4388d9d7edff884b0",
+    "values": {
+      "imu_window_sec": 0.15,
+      "motion_angular_scale": 2.0,
+      "motion_accel_scale": 3.0,
+      "motion_rotation_scale_rad": 0.05,
+      "motion_translation_scale_m": 2.0,
+      "motion_min_reliability": 0.2,
+      "motion_missing_reliability": 0.2,
+      "imu_gravity": 9.81,
+      "density_scale": 8.0,
+      "range_scale_m": 20.0,
+      "view_edge_penalty": 0.0,
+      "semantic_confidence_floor": 0.15,
+      "voxel_size": 0.1,
+      "evidence_prior": 1.0,
+      "evidence_strength": 1.0,
+      "evidence_decay": 0.995,
+      "evidence_decay_reference_sec": 0.1,
+      "max_frame_evidence": 3.0,
+      "max_total_evidence": 200.0,
+      "max_observation_weight": null,
+      "num_classes": 13,
+      "uncertainty_entropy_weight": 0.7,
+      "dynamic_voxel_ttl_sec": 10.0,
+      "voxel_ttl_sec": 300.0
+    },
+    "density_neighborhood_radius_m": 0.3,
+    "imu_window_interpretation": "plus/minus half-window, closed"
+  },
+  "experiment": {
+    "time_offsets_ms": [
+      0.0,
+      20.0,
+      50.0,
+      100.0,
+      150.0
+    ],
+    "frame_tolerance_ms": 6.0,
+    "semantic_match_tolerance_m": 0.02,
+    "min_match_fraction": 0.98,
+    "point_sample_rate": 1.0,
+    "max_points_per_frame_per_offset": 1000,
+    "posterior_storage": "none",
+    "summary_scope": "deterministically sampled exported points",
+    "voxel_eval": false,
+    "motion_weighting": "temporal_relative_camera_pose_v2",
+    "motion_reference": "nearest accepted RGB frame to each LiDAR timestamp"
+  },
+  "alignment": {
+    "frame_count": 100,
+    "accepted_frame_count": 100,
+    "rejected_frame_count": 0,
+    "total_normal_points": 509515,
+    "total_semantic_points": 509515,
+    "total_matched_points": 509515,
+    "aggregate_matched_fraction": 1.0,
+    "distance_sample_count": 200000,
+    "mean_match_distance_m": 1.0713652187632761e-19,
+    "p95_match_distance_m": 0.0,
+    "max_match_distance_m": 5.551115123125783e-17,
+    "rejected_frames": []
+  },
+  "offset_flow": {
+    "0": {
+      "lidar_frames": 100,
+      "motion_pose_frames": 100,
+      "relative_rotation_rad_sum": 0.0,
+      "relative_translation_m_sum": 0.0,
+      "motion_v2_reliability_sum": 100.0,
+      "motion_v1_reliability_sum": 99.99825463647099,
+      "projected_normal_points": 141774,
+      "empty_projection_frames": 40,
+      "matched_projected_points": 141774,
+      "exported_points": 25716
+    },
+    "20": {
+      "lidar_frames": 100,
+      "rgb_rejected_outside_tolerance": 1,
+      "motion_pose_frames": 99,
+      "relative_rotation_rad_sum": 0.0,
+      "relative_translation_m_sum": 0.0007671117782592773,
+      "motion_v2_reliability_sum": 98.99999998540618,
+      "motion_v1_reliability_sum": 98.99875229773966,
+      "projected_normal_points": 141774,
+      "matched_projected_points": 141774,
+      "exported_points": 25716,
+      "empty_projection_frames": 39
+    },
+    "50": {
+      "lidar_frames": 100,
+      "rgb_rejected_outside_tolerance": 1,
+      "motion_pose_frames": 99,
+      "relative_rotation_rad_sum": 0.0,
+      "relative_translation_m_sum": 0.002169966697692871,
+      "motion_v2_reliability_sum": 98.99999988352428,
+      "motion_v1_reliability_sum": 98.99875229773966,
+      "projected_normal_points": 141774,
+      "matched_projected_points": 141774,
+      "exported_points": 25716,
+      "empty_projection_frames": 39
+    },
+    "100": {
+      "lidar_frames": 100,
+      "rgb_rejected_outside_tolerance": 2,
+      "motion_pose_frames": 98,
+      "relative_rotation_rad_sum": 0.0,
+      "relative_translation_m_sum": 0.0036286115646362305,
+      "motion_v2_reliability_sum": 97.99999967282369,
+      "motion_v1_reliability_sum": 97.99915378252032,
+      "projected_normal_points": 141007,
+      "matched_projected_points": 141007,
+      "exported_points": 25561,
+      "empty_projection_frames": 39
+    },
+    "150": {
+      "lidar_frames": 100,
+      "rgb_rejected_outside_tolerance": 3,
+      "motion_pose_frames": 97,
+      "relative_rotation_rad_sum": 0.0,
+      "relative_translation_m_sum": 0.004603981971740723,
+      "motion_v2_reliability_sum": 96.99999947144796,
+      "motion_v1_reliability_sum": 96.99948729612763,
+      "projected_normal_points": 135495,
+      "matched_projected_points": 135495,
+      "exported_points": 24561,
+      "empty_projection_frames": 39
+    }
+  },
+  "motion_by_offset_ms": {
+    "0": {
+      "frame_count": 100,
+      "mean_relative_rotation_rad": 0.0,
+      "mean_relative_translation_m": 0.0,
+      "mean_motion_v2_reliability": 1.0,
+      "mean_motion_v1_reliability_diagnostic": 0.9999825463647098
+    },
+    "20": {
+      "frame_count": 99,
+      "mean_relative_rotation_rad": 0.0,
+      "mean_relative_translation_m": 7.748603820800781e-06,
+      "mean_motion_v2_reliability": 0.9999999998525877,
+      "mean_motion_v1_reliability_diagnostic": 0.9999873969468652
+    },
+    "50": {
+      "frame_count": 99,
+      "mean_relative_rotation_rad": 0.0,
+      "mean_relative_translation_m": 2.1918855532251223e-05,
+      "mean_motion_v2_reliability": 0.9999999988234776,
+      "mean_motion_v1_reliability_diagnostic": 0.9999873969468652
+    },
+    "100": {
+      "frame_count": 98,
+      "mean_relative_rotation_rad": 0.0,
+      "mean_relative_translation_m": 3.702664861873704e-05,
+      "mean_motion_v2_reliability": 0.9999999966614662,
+      "mean_motion_v1_reliability_diagnostic": 0.9999913651277584
+    },
+    "150": {
+      "frame_count": 97,
+      "mean_relative_rotation_rad": 0.0,
+      "mean_relative_translation_m": 4.746373166743013e-05,
+      "mean_motion_v2_reliability": 0.99999999455101,
+      "mean_motion_v1_reliability_diagnostic": 0.9999947143930683
+    }
+  },
+  "sample_flow": {
+    "normal_points": 509515,
+    "semantic_points": 509515,
+    "matched_points": 509515,
+    "imu_ok_frames": 100,
+    "projected_normal_points": 701824,
+    "matched_projected_points": 701824,
+    "exported_points": 127270
+  },
+  "imu_audit": {
+    "sample_count": 497,
+    "mean_acceleration_norm_mps2": 9.805838788299253,
+    "median_acceleration_norm_mps2": 9.8100004196167,
+    "configured_gravity_mps2": 9.81
+  },
+  "overall": {
+    "exported_point_count": 127270,
+    "supported_point_count": 126736,
+    "accuracy": 0.8990736649412953,
+    "calibration": {
+      "sample_count": 126736,
+      "ece": 0.011468600816476243,
+      "nll": 0.30761354066136576,
+      "brier": 0.144253746843484,
+      "brier_definition": "sum over project classes; not divided by K"
+    }
+  },
+  "by_class": {
+    "road": {
+      "count": 74556,
+      "accuracy": 0.9933741080530072,
+      "mean_confidence": 0.9857719140773048
+    },
+    "building": {
+      "count": 16253,
+      "accuracy": 0.9510244262597675,
+      "mean_confidence": 0.9175991099936627
+    },
+    "person": {
+      "count": 2000,
+      "accuracy": 0.639,
+      "mean_confidence": 0.6931294861243871
+    },
+    "car": {
+      "count": 10258,
+      "accuracy": 0.8158510430883213,
+      "mean_confidence": 0.7650113573644056
+    },
+    "truck": {
+      "count": 10476,
+      "accuracy": 0.4921725849560901,
+      "mean_confidence": 0.6165579092745016
+    },
+    "bus": {
+      "count": 12965,
+      "accuracy": 0.7422290782876977,
+      "mean_confidence": 0.7794360978478706
+    },
+    "bicycle": {
+      "count": 228,
+      "accuracy": 0.0,
+      "mean_confidence": 0.3450336322521731
+    }
+  },
+  "unsupported": {
+    "all_matched_projected_by_class": {
+      "unmapped": 3069
+    },
+    "exported_by_class": {
+      "unmapped": 534
+    },
+    "exported_gt_source": {
+      "semantic_tag": 90809,
+      "actor_metadata": 35927,
+      "unmapped_tag": 534
+    }
+  },
+  "factor_relationships": {
+    "motion": {
+      "sample_count": 126736,
+      "reliability_gap": 0.10092633317983402,
+      "correctness_auroc": 0.5002692280916465,
+      "aurc": 0.10335790230526994
+    },
+    "motion_v1_diagnostic": {
+      "sample_count": 126736,
+      "reliability_gap": 0.10091196589304519,
+      "correctness_auroc": 0.5017173044041622,
+      "aurc": 0.10223037568450961
+    },
+    "density": {
+      "sample_count": 126736,
+      "reliability_gap": 0.2411457559015585,
+      "correctness_auroc": 0.6290743069210468,
+      "aurc": 0.05950466395214534
+    },
+    "range": {
+      "sample_count": 126736,
+      "reliability_gap": 0.14739172806911913,
+      "correctness_auroc": 0.7155119579281775,
+      "aurc": 0.04094994162491128
+    },
+    "view": {
+      "sample_count": 126736,
+      "reliability_gap": 0.10092633505870474,
+      "correctness_auroc": 0.5,
+      "aurc": 0.10349492520350503
+    },
+    "semantic": {
+      "sample_count": 126736,
+      "reliability_gap": 0.019408785814458356,
+      "correctness_auroc": 0.9208397494866611,
+      "aurc": 0.013796351366920064
+    },
+    "combined": {
+      "sample_count": 126736,
+      "reliability_gap": 0.3339540696501911,
+      "correctness_auroc": 0.7228977064129178,
+      "aurc": 0.04005050969469366
+    }
+  },
+  "ablation": {
+    "interpretation": "Single-frame argmax is unchanged. Weighted accuracy is a diagnostic ranking statistic; VoxelMap results test fusion.",
+    "point_level_diagnostic": {
+      "none": {
+        "sample_count": 126736,
+        "weight_sum": 126736.0,
+        "weighted_accuracy_diagnostic": 0.8990736649412953,
+        "effective_sample_size": 126736.0
+      },
+      "semantic": {
+        "sample_count": 126736,
+        "weight_sum": 115989.79465982318,
+        "weighted_accuracy_diagnostic": 0.9245719820267296,
+        "effective_sample_size": 123898.31268278003
+      },
+      "semantic_range": {
+        "sample_count": 126736,
+        "weight_sum": 90649.84870370268,
+        "weighted_accuracy_diagnostic": 0.9350036857852101,
+        "effective_sample_size": 111630.94275052991
+      },
+      "semantic_range_density": {
+        "sample_count": 126736,
+        "weight_sum": 71620.99773800676,
+        "weighted_accuracy_diagnostic": 0.9394790217773233,
+        "effective_sample_size": 94019.8490508486
+      },
+      "semantic_range_density_view": {
+        "sample_count": 126736,
+        "weight_sum": 71620.99773800676,
+        "weighted_accuracy_diagnostic": 0.9394790217773233,
+        "effective_sample_size": 94019.8490508486
+      },
+      "full": {
+        "sample_count": 126736,
+        "weight_sum": 71620.9975955488,
+        "weighted_accuracy_diagnostic": 0.9394790218186861,
+        "effective_sample_size": 94019.84904693837
+      }
+    }
+  },
+  "artifacts": {
+    "per_point_csv": "per_point.csv",
+    "factor_summary_csv": "factor_summary.csv",
+    "posterior_directory": null,
+    "posterior_dtype": null,
+    "posterior_class_order": [
+      "road",
+      "building",
+      "tree",
+      "person",
+      "car",
+      "truck",
+      "bus",
+      "bicycle",
+      "electric_bicycle",
+      "motorcycle",
+      "chair",
+      "bench",
+      "unknown background"
+    ]
+  },
+  "warnings": [
+    "Checkpoint cannot emit project classes: electric_bicycle, chair, bench; their GT rows are retained but excluded from primary metrics.",
+    "Full posterior storage was disabled; per_point.csv retains only confidence, GT probability and entropy.",
+    "Motion V2 is a frame-level relative-pose risk prior, not measured per-point reprojection error; its CARLA parameters are experimental.",
+    "IMU Motion V1 is retained only as a diagnostic and does not enter the full reliability product."
+  ],
+  "elapsed_seconds": 22.81727854800556
+}
