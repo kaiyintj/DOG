@@ -1213,6 +1213,11 @@ CARLA 相关代码位于 `semantic_mapping/carla/`，四个 ROS 入口如下：
 | `carla_capture_reliability` | 采集三维点级可靠性数据（普通/语义 LiDAR + IMU） | `CARLA_RELIABILITY_BENCHMARK.md` |
 | `carla_evaluate_reliability` | 五因素可靠性、时间偏移、消融与 VoxelMap 评测 | `CARLA_RELIABILITY_BENCHMARK.md` |
 
+截至 2026-08-13，Motion V2 的 CARLA 实验记录、报告和体素验收结论见
+[CARLA Motion V2 实验记录](results/carla_motion_v2_20260813/README.md)。
+该实验只验证时间偏移风险的响应方向；体素 uncertainty 主指标未通过，
+Motion V2 参数未冻结，也没有接入 `ga_bsvm_node.py` 或实机运行时权重。
+
 每组代码都有不需要 CARLA 服务器和模型权重的离线冒烟测试，先跑一遍确认安装和分层
 改动没有破坏入口：
 

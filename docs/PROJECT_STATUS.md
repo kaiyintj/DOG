@@ -319,8 +319,13 @@ LiDAR-相机外参仍是占位值，因此 `projection_calibration_verified` 必
   有界重试队列；无时间戳或重试超时的帧会被丢弃，不再使用最新位姿污染地图；
 - `school_parking_lot.world` 中旧版 `white truck` 曾错误选择红车局部白色附件；簇级
   颜色支持率修复及自动测试已完成，干净 Gazebo 回归尚待执行，不能提前记为实测通过；
-- CARLA 0.9.16 的采集和评测工具已能生成车辆、行人和两轮车数据；已有有效采集记录，
-  但最终 CLIP/SegFormer 对比指标报告尚未完成，不能作为论文最终结果；
+- CARLA 0.9.16 的采集和评测工具已能生成车辆、行人和两轮车数据；二维
+  CLIP/SegFormer 基准与三维可靠性基准入口均可运行。2026-08-13 已完成 stationary、
+  constant-velocity、turning 三组 Motion V2 时间偏移评测并归档报告；Motion V2 的
+  offset 响应方向成立，但 turning 体素 uncertainty 主验收未通过，参数未冻结，
+  不得直接迁移到实机 runtime。详细结果见
+  [CARLA Motion V2 实验记录](results/carla_motion_v2_20260813/README.md)；这些结果
+  仍是受控 CARLA 验证，不能替代 Gazebo 和实机验证；
 - 已新增独立 `carla_reliability_v1` 采集与离线评测链路：普通 LiDAR 作为算法输入，
   Semantic LiDAR 仅提供互为最近邻且覆盖率门控后的点级 GT，历史 RGB pose 可构造
   0/20/50/100/150 ms 时间偏移；五个可靠度因子共用 GA-BSVM 正式公式，并可调用
@@ -395,7 +400,8 @@ SciPy 1.11.4，并为 SegFormer/CLIP 分开声明模型依赖；当前全局环�
 
 1. 先用正式 Lite3 静止 Bag 完成电脑端
    `ALGORITHM_STATIC_PASS_NON_GEOMETRIC` 烟测；
-2. 验收 Lite3 CameraInfo、静态 TF 和 LiDAR-相机外参后，才把
+2. 在进入实机 reliability 融合前，先保留 Motion V2 为诊断量；验收
+   Camera/LiDAR 时间戳、CameraInfo、静态 TF 和 LiDAR-相机外参后，才把
    `projection_calibration_verified` 改为 `true`；
 3. 修复 CLIP 源时间戳后，使用 `fast_lio_lite3_real.yaml` 采集并验证受控低速运动 Bag；
 4. 先完成已实现 Nav2 action 事务和簇级颜色查询的 Gazebo 闭环验收，再实现语义查询
