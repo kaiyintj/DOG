@@ -288,6 +288,16 @@ def test_quaternion_angle_uses_shortest_sign_equivalence():
         identity, negative_identity) == 0.0
 
 
+def test_runtime_validator_accepts_13_class_lite3_logits():
+    state = {'arrays': {}}
+    message = SimpleNamespace(data=[0.0] * (3 * 4 * 13))
+
+    MODULE._inspect_runtime_message(state, '/clip_logits', message)
+
+    assert state['arrays']['/clip_logits']['count'] == 1
+    assert state['arrays']['/clip_logits']['invalid_length_count'] == 0
+
+
 def test_report_never_calls_structural_pass_motion_ready():
     result = {
         'overall': MODULE.PASS_STATUS,
@@ -317,6 +327,8 @@ def test_offline_runner_is_valid_bash_and_avoids_broad_process_kills():
     assert 'CLIP_OFFLINE_PREFLIGHT=PASS' in source
     assert 'query_after_nonempty_cloud.py' in source
     assert "int(message.width) * int(message.height) > 0" in source
+    assert "ga_parameters['pointcloud_frame'] = 'base_link'" in source
+    assert 'get_publishers_info_by_topic' in source
     assert 'git-status.txt' in source
 
 

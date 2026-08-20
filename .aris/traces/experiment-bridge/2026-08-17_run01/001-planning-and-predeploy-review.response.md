@@ -1,0 +1,1 @@
+已完成 ARIS W1.5 预部署工件和“结构停止、质量继续”窄修订。创建 AGENTS.md、research_contract.md、timestamped/latest EXPERIMENT_PLAN、timestamped/latest EXPERIMENT_TRACKER、EXPERIMENT_CODE_REVIEW.md 和 MANIFEST.md。timestamped/latest 散列一致。外层 GPU 预检已解除审查 sandbox 的假阴性；执行器仍从 P0 复核。原计划 turning point/voxel 输出目录冲突已修正。现在只有结构无效会阻断真实依赖链；所有质量 FAIL 都保留为负结果并继续后续独立诊断、motion、消融和最终统计。未运行测试、未修改源码或正式 YAML，也未提交或推送。

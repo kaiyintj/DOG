@@ -7,6 +7,7 @@ Current project truth and reproducible commands are maintained in:
 
 - [Current version status](docs/PROJECT_STATUS.md)
 - [Bag, Gazebo and Lite3 runbook](docs/RUNBOOK.md)
+- [Lite3 real-machine handoff](docs/LITE3_REAL_HANDOFF.md)
 - [CARLA CLIP/SegFormer image benchmark](docs/CARLA_IMAGE_BENCHMARK.md)
 - [CARLA point-level reliability benchmark](docs/CARLA_RELIABILITY_BENCHMARK.md)
 
@@ -163,7 +164,7 @@ computer:
 ```bash
 bash scripts/run_lite3_offline_smoke.sh \
   --input \
-  ysc@192.168.1.103:/home/ysc/lite3_bags/lite3_concurrent_20260723_141216_KkOBA6
+  /home/yk/lite3_robot_captures/lite3_concurrent_20260726_202334_azggiT
 ```
 
 The runner copies or references the immutable source bags, merges the four

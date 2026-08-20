@@ -159,6 +159,7 @@ ga_bsvm_node:
     motion_translation_scale_m: 2.0
     motion_min_reliability: 0.2
     motion_missing_reliability: 0.2
+    imu_acceleration_scale: 1.0
     imu_gravity: 9.81
     density_scale: 8.0
     range_scale_m: 20.0

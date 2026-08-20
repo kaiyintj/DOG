@@ -10,6 +10,10 @@
 新对话开始时，先阅读本文、[RUNBOOK.md](RUNBOOK.md) 和项目根目录的
 [README.md](../README.md)。当前最重要的交接信息如下：
 
+若新对话的目标是继续 Lite3 实机迁移，还必须先阅读专用的
+[LITE3_REAL_HANDOFF.md](LITE3_REAL_HANDOFF.md)。其中冻结了当前最佳 Bag、电脑归档路径、
+下一条离线烟测命令和实机运动前门禁，优先级高于旧聊天中的临时命令。
+
 - 代码已按用途分层：`semantic_mapping/runtime/` 放实际运行代码及其依赖的共用核心，
   `semantic_mapping/carla/` 只放 CARLA 仿真采集/评测代码；运行时目录不依赖 carla 目录，
   `setup.py` 的 ROS 入口已同步指向新路径；

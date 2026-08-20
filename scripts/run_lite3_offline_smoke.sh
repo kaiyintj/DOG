@@ -305,7 +305,7 @@ stop_group() {
 
 cleanup_processes() {
   local name
-  for name in player query recorder ga clip fast_lio; do
+  for name in player authority query recorder ga clip fast_lio; do
     stop_group "$name"
   done
 }
@@ -487,8 +487,8 @@ FAST_LIO_RUNTIME_CONFIG="$GENERATED_DIR/fast_lio_lite3_offline.yaml"
     scripts/run_lite3_offline_smoke.sh \
     scripts/verify_lite3_capture.py \
     scripts/verify_lite3_offline_smoke.py \
-    semantic_mapping/clip_node.py \
-    semantic_mapping/ga_bsvm_node.py
+    semantic_mapping/runtime/clip_node.py \
+    semantic_mapping/runtime/ga_bsvm_node.py
 ) >"$RUN_DIR/implementation_sha256.txt"
 if (
   [[ -f "$FAST_LIO_SOURCE_ROOT/src/laserMapping.cpp" ]] &&
@@ -799,6 +799,11 @@ clip_parameters['use_sim_time'] = True
 ga_parameters['use_sim_time'] = True
 ga_parameters['semantic_backend'] = 'clip'
 ga_parameters['camera_k'] = k
+# The capture has no base_link -> rslidar TF.  For this explicitly
+# non-geometric static smoke only, attach raw LiDAR coordinates to FAST-LIO's
+# base_link authority so the software chain can be exercised without
+# inventing a measured sensor extrinsic or changing the real-robot config.
+ga_parameters['pointcloud_frame'] = 'base_link'
 runtime_config.write_text(
     yaml.safe_dump(configuration, sort_keys=False),
     encoding='utf-8',
@@ -920,6 +925,83 @@ if __name__ == '__main__':
         main()
     except (KeyboardInterrupt, ExternalShutdownException):
         pass
+PY
+
+AUTHORITY_WATCHER="$GENERATED_DIR/runtime_authority_monitor.py"
+cat >"$AUTHORITY_WATCHER" <<'PY'
+"""Monitor publisher authority with one persistent ROS graph cache."""
+
+import json
+import pathlib
+import sys
+import time
+
+import rclpy
+from rclpy.executors import ExternalShutdownException
+
+
+topics = ('/clock', '/Odometry', '/tf', '/cmd_vel')
+expected = (1, 1, 1, 0)
+log_path = pathlib.Path(sys.argv[1])
+ready_path = pathlib.Path(sys.argv[2])
+report_path = pathlib.Path(sys.argv[3])
+sample_count = 0
+consecutive_mismatches = 0
+violations = 0
+counts = (0, 0, 0, 0)
+ready = False
+
+rclpy.init()
+node = rclpy.create_node('lite3_offline_authority_monitor')
+log_path.write_text('clock\todometry\ttf\tcmd_vel\n', encoding='utf-8')
+try:
+    next_sample = time.monotonic()
+    while rclpy.ok():
+        rclpy.spin_once(node, timeout_sec=0.1)
+        now = time.monotonic()
+        if now < next_sample:
+            continue
+        next_sample = now + 1.0
+        counts = tuple(
+            len(node.get_publishers_info_by_topic(topic))
+            for topic in topics
+        )
+        with log_path.open('a', encoding='utf-8') as stream:
+            stream.write('{}\t{}\t{}\t{}\n'.format(*counts))
+        sample_count += 1
+        if counts == expected:
+            consecutive_mismatches = 0
+            if not ready:
+                ready = True
+                ready_path.write_text('READY\n', encoding='utf-8')
+        elif ready:
+            consecutive_mismatches += 1
+            if consecutive_mismatches >= 3:
+                violations = 1
+                break
+except (KeyboardInterrupt, ExternalShutdownException):
+    pass
+finally:
+    reported_counts = expected if ready and not violations else counts
+    report = {
+        'clock_publishers': reported_counts[0],
+        'odometry_publishers': reported_counts[1],
+        'tf_publishers': reported_counts[2],
+        'cmd_vel_publishers': reported_counts[3],
+        'authority_sample_count': sample_count,
+        'authority_violations': violations,
+        'monitor_ready': ready,
+        'last_observed_publishers': dict(zip(topics, counts)),
+    }
+    report_path.write_text(
+        json.dumps(report, indent=2, sort_keys=True) + '\n',
+        encoding='utf-8',
+    )
+    node.destroy_node()
+    if rclpy.ok():
+        rclpy.shutdown()
+
+raise SystemExit(2 if violations else 0)
 PY
 
 if ((PREPARE_ONLY)); then
@@ -1222,57 +1304,30 @@ start_group \
 
 RUNTIME_GRAPH="$RUN_DIR/runtime_graph.json"
 AUTHORITY_LOG="$LOGS_DIR/authority_samples.tsv"
-printf 'clock\todometry\ttf\tcmd_vel\n' >"$AUTHORITY_LOG"
-GRAPH_READY=0
-for unused_attempt in {1..20}; do
-  CLOCK_PUBLISHERS="$(topic_publisher_count /clock)"
-  ODOMETRY_PUBLISHERS="$(topic_publisher_count /Odometry)"
-  TF_PUBLISHERS="$(topic_publisher_count /tf)"
-  CMD_VEL_PUBLISHERS="$(topic_publisher_count /cmd_vel)"
-  if ((
-    CLOCK_PUBLISHERS == 1 &&
-    ODOMETRY_PUBLISHERS == 1 &&
-    TF_PUBLISHERS == 1 &&
-    CMD_VEL_PUBLISHERS == 0
-  )); then
-    GRAPH_READY=1
-    break
-  fi
+AUTHORITY_READY="$RUN_DIR/authority_ready"
+start_group \
+  authority \
+  "$LOGS_DIR/authority.log" \
+  python3 -u \
+    "$AUTHORITY_WATCHER" \
+    "$AUTHORITY_LOG" \
+    "$AUTHORITY_READY" \
+    "$RUNTIME_GRAPH"
+
+for unused_attempt in {1..30}; do
+  [[ -f "$AUTHORITY_READY" ]] && break
+  group_is_alive "${PROCESS_PIDS[authority]}" ||
+    fail 'runtime publisher authority monitor exited before becoming ready'
   sleep 1
 done
-
-((GRAPH_READY)) ||
+[[ -f "$AUTHORITY_READY" ]] ||
   fail 'runtime publisher graph did not reach the isolated expected state'
 
-AUTHORITY_SAMPLE_COUNT=0
 while group_is_alive "${PROCESS_PIDS[player]}"; do
-  for required_process in fast_lio clip ga recorder; do
+  for required_process in fast_lio clip ga recorder authority; do
     group_is_alive "${PROCESS_PIDS[$required_process]}" ||
       fail "$required_process exited during playback"
   done
-
-  CLOCK_PUBLISHERS="$(topic_publisher_count /clock)"
-  ODOMETRY_PUBLISHERS="$(topic_publisher_count /Odometry)"
-  TF_PUBLISHERS="$(topic_publisher_count /tf)"
-  CMD_VEL_PUBLISHERS="$(topic_publisher_count /cmd_vel)"
-  group_is_alive "${PROCESS_PIDS[player]}" || break
-
-  printf '%s\t%s\t%s\t%s\n' \
-    "$CLOCK_PUBLISHERS" \
-    "$ODOMETRY_PUBLISHERS" \
-    "$TF_PUBLISHERS" \
-    "$CMD_VEL_PUBLISHERS" \
-    >>"$AUTHORITY_LOG"
-  AUTHORITY_SAMPLE_COUNT=$((AUTHORITY_SAMPLE_COUNT + 1))
-
-  if ! ((
-    CLOCK_PUBLISHERS == 1 &&
-    ODOMETRY_PUBLISHERS == 1 &&
-    TF_PUBLISHERS == 1 &&
-    CMD_VEL_PUBLISHERS == 0
-  )); then
-    fail 'runtime publisher authority changed during playback'
-  fi
   sleep 2
 done
 
@@ -1287,37 +1342,21 @@ echo "player_status=$PLAYER_STATUS"
 ((PLAYER_STATUS == 0)) ||
   fail "ros2 bag play failed or timed out with status $PLAYER_STATUS"
 
-for required_process in fast_lio clip ga recorder; do
+for required_process in fast_lio clip ga recorder authority; do
   group_is_alive "${PROCESS_PIDS[$required_process]}" ||
     fail "$required_process exited at the end of playback"
 done
-
-python3 - \
-  "$RUNTIME_GRAPH" \
-  "$CLOCK_PUBLISHERS" \
-  "$ODOMETRY_PUBLISHERS" \
-  "$TF_PUBLISHERS" \
-  "$CMD_VEL_PUBLISHERS" \
-  "$AUTHORITY_SAMPLE_COUNT" <<'PY'
+stop_group authority
+python3 - "$RUNTIME_GRAPH" <<'PY'
 import json
 import pathlib
 import sys
 
-path = pathlib.Path(sys.argv[1])
-keys = (
-    'clock_publishers',
-    'odometry_publishers',
-    'tf_publishers',
-    'cmd_vel_publishers',
-    'authority_sample_count',
-)
-values = [int(value) for value in sys.argv[2:]]
-document = dict(zip(keys, values))
-document['authority_violations'] = 0
-path.write_text(
-    json.dumps(document, indent=2, sort_keys=True) + '\n',
-    encoding='utf-8',
-)
+report = json.loads(pathlib.Path(sys.argv[1]).read_text(encoding='utf-8'))
+if not report.get('monitor_ready'):
+    raise SystemExit('runtime publisher authority monitor was never ready')
+if int(report.get('authority_violations', 1)) != 0:
+    raise SystemExit('runtime publisher authority changed during playback')
 PY
 
 sleep 3

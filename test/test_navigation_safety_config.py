@@ -181,8 +181,20 @@ def test_lite3_profile_fails_closed_until_calibration_and_bridge_are_ready():
     assert mapping['query_require_robot_pose_for_approach'] is True
     assert mapping['query_approach_min_distance_m'] >= 1.2
     assert mapping['query_path_clearance_radius_m'] >= 0.65
+    assert mapping['imu_acceleration_scale'] == 9.80665
     assert active['nav_cmd_vel_topic'] == '/cmd_vel'
     assert active['cmd_vel_topic'] == '/cmd_vel_lite3_safe'
+
+
+def test_non_lite3_profiles_keep_si_imu_acceleration_scale():
+    for relative_path in (
+        'config/semantic_mapping_m2dgr.yaml',
+        'config/semantic_mapping_sim_livox.yaml',
+    ):
+        params = load_yaml(relative_path)
+        mapping = params['ga_bsvm_node']['ros__parameters']
+
+        assert mapping['imu_acceleration_scale'] == 1.0
 
 
 def test_lite3_moving_fast_lio_profile_publishes_nav2_body_cloud():

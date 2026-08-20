@@ -273,6 +273,7 @@ class GABsvmNode(Node):
         self.declare_parameter('motion_accel_scale', 3.0)
         self.declare_parameter('motion_min_reliability', 0.2)
         self.declare_parameter('motion_missing_reliability', 0.2)
+        self.declare_parameter('imu_acceleration_scale', 1.0)
         self.declare_parameter('imu_gravity', 9.81)
         self.declare_parameter('density_scale', 8.0)
         self.declare_parameter('range_scale_m', 20.0)
@@ -503,6 +504,13 @@ class GABsvmNode(Node):
             0.0,
             1.0,
         ))
+        self.imu_acceleration_scale = float(
+            self.get_parameter('imu_acceleration_scale').value)
+        if (
+            not np.isfinite(self.imu_acceleration_scale)
+            or self.imu_acceleration_scale <= 0.0
+        ):
+            raise ValueError('imu_acceleration_scale must be finite and positive')
         self.imu_gravity = float(self.get_parameter('imu_gravity').value)
         self.density_scale = float(self.get_parameter('density_scale').value)
         self.range_scale_m = float(self.get_parameter('range_scale_m').value)
@@ -820,7 +828,7 @@ class GABsvmNode(Node):
             msg.angular_velocity.y,
             msg.angular_velocity.z,
         ])
-        acceleration_norm = np.linalg.norm([
+        acceleration_norm = self.imu_acceleration_scale * np.linalg.norm([
             msg.linear_acceleration.x,
             msg.linear_acceleration.y,
             msg.linear_acceleration.z,

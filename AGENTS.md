@@ -1,0 +1,87 @@
+# ARIS / Auto-Claude CARLA 执行约束
+
+## Pipeline Status
+
+```yaml
+language: zh
+workflow: ARIS_W1.5_experiment_bridge
+orchestrator: wanshuiyin/Auto-claude-code-research-in-sleep
+backend: local
+platform: Linux
+ros_distro: humble
+python: "3.10"
+accelerator: CUDA_single_gpu
+wandb: false
+code_sync: local
+AUTO_DEPLOY: true
+SANITY_FIRST: true
+MAX_PARALLEL_RUNS: 1
+planning_model: gpt-5.6-sol
+review_model: gpt-5.6-sol
+execution_model: gpt-5.6-luna
+execution_reasoning_effort: max
+scope: CARLA_simulation_and_offline_evaluation_only
+p2_auto_deploy: false
+```
+
+## 范围约束（HERO：反过度防御）
+
+来源：https://github.com/wanshuiyin/HERO-Anti-OverDefense
+
+这些约束管“提议什么修法”，不管“找什么”：这里真的有问题都要报，包括听起来罕见但本项目确实会产生的情况。报完后把修法收在范围内：
+
+1. 这不是安全攻防论文：默认操作者是自己机器上的合作者。校验欢迎，过度防御禁止。
+2. 不加哈希/校验和/指纹，除非它替代了一个实质上更贵的操作，并且结果会改变下一步做什么。
+3. 不为这里不会发生的情况加 feature flag、迁移框架、兼容层、包装层或守卫。
+4. 冷门编码、符号链接竞态、毫秒级竞态等一律不在范围内，除非经由本项目受支持的用法可达——文档示例、公开接口、真实数据。可达即可，不需要复现；“理论上构造得出”不算。
+5. 该判断的地方就判断，不要换成评分表、检查清单，或对已经定论的东西再跑一遍校验/审计。
+6. 以上不覆盖用户、本项目约定或更高优先级规则明确要求的安全、迁移、校验与审阅。本文件已有的结构硬门、质量门、tracker 状态和用户指定流程是被要求的，属于工作本身，继续执行。
+
+过度防御的四种形状，用于校准而不是当清单：Hashing（哈希）、Edge cases（边界情况）、Rubrics（机械判断）、Overbuild（过度建设）。一个真问题不会因为“长得像其中一条”就被驳回。
+
+跑任何检查前先回答：这次运行会检测出什么具体失败？真出现了我会做什么不同的事？答不上来就别跑。对的就说对，不要为了交差硬找问题。
+
+## 当前任务
+
+- 固定入口：`refine-logs/EXPERIMENT_PLAN.md` 与 `refine-logs/EXPERIMENT_TRACKER.md`。
+- 严格按 P0 → P1 执行；P2 只保留预算和矩阵估算，未经用户再次确认不得启动。
+- `AUTO_DEPLOY=true` 表示结构硬门通过后自动继续 P0/P1。质量门失败必须保留为负结果，但不得据此停止后续独立诊断或消融；P2 hold 仍需用户另行确认。
+- 单 GPU 上 CARLA server 与 SegFormer 都占显存；采集和离线推理串行，`MAX_PARALLEL_RUNS=1`。
+- W&B 禁用。状态、命令、退出码、日志与结果只写本地带时间戳运行目录。
+
+## 不可违反的研究边界
+
+- `evaluation_type=simulation_only`。Semantic LiDAR 仅是离线 GT；不得进入 SegFormer 输入、可靠性公式或 VoxelMap 预测输入。
+- 不改变 GT 映射，不删困难样本，不偷降阈值，不把 unsupported 类计入主指标。
+- `electric_bicycle` unsupported；禁止用 `bicycle` 代替。
+- Motion V2 当前只通过机制响应，未通过体素主门；禁止接入 `semantic_mapping/runtime/ga_bsvm_node.py` 或正式实机权重。
+- 不修改 `config/semantic_mapping_sim_livox.yaml`。参数扫描只修改 `$AUTOTEST_ROOT/configs/` 下的副本。
+- 不运行 Gazebo、Nav2 或实机节点；不提交、不推送、不删除旧数据、不清理用户 dirty 修改。
+
+## 执行与故障纪律
+
+- 每个子运行使用唯一输出目录；不得覆盖既有结果。只信 `manifest.json` 中的地图、版本、seed 和传感器配置。
+- **结构硬门（可停止依赖链）**：环境/资源不可用；build、定向测试、代码入口或命令执行失败；manifest/schema/固定 revision 不成立；GT alignment 无效；数据或支持 GT 为空；必需结构化产物缺失/不可解析。只把真正依赖该无效产物的 run 标记 `NOT_RUN`；不相关分支继续。
+- **质量门（不可停止自主测试）**：SegFormer IoU、逐类 detection/class accuracy 低于目标，reliability AUROC/CI 不支持 claim，VoxelMap accuracy/coverage/gap/AUROC 未改善，或 Motion V2 效果门失败。这些 run 记为 `FAIL`/negative/inconclusive，仍继续后续独立 seed、因素诊断、motion 和六组消融。
+- 先读 traceback/stderr/主日志。禁止无改动重试。
+- 对有日志证据的实验工具缺陷，执行者最多做 2 次最小修复并复测；每次必须保存 diff、命令、退出码和新日志。该授权不包括改变 GT、验收阈值、正式 YAML、实验假设或把 Motion V2 接入 runtime。
+- 普通环境差异由执行模型诊断并做必要的最小处置；SciPy/NumPy warning 在没有异常时只记录，不当作失败。
+- 端口被占用时先识别进程。禁止 `pkill`、`killall` 和无法确认归属的终止操作。
+- 状态只使用 `PASS`、`FAIL`、`BLOCKED`、`INVALID`、`NOT_RUN`；tracker 初始状态保持 `TODO`。其中 `FAIL` 默认表示已得到可用但未达质量门的负结果，不传播停止；`BLOCKED`/`INVALID`/执行失败只阻断实际依赖该产物的 run。
+
+## 工作树保护基线（2026-08-17 13:03 +0800）
+
+基线 commit：`963aa693eabcece9f3b9c07aa4cc326ebc673000`
+
+执行开始时重新记录 `git status --short --branch`；当前已知用户修改/未跟踪文件如下，均不得覆盖或清理：
+
+```text
+ M README.md
+ M docs/PROJECT_STATUS.md
+ M docs/RUNBOOK.md
+ M scripts/run_lite3_offline_smoke.sh
+ M scripts/verify_lite3_offline_smoke.py
+ M test/test_lite3_offline_smoke.py
+?? docs/CARLA_AUTONOMOUS_TEST_PLAN.md
+?? docs/LITE3_REAL_HANDOFF.md
+```

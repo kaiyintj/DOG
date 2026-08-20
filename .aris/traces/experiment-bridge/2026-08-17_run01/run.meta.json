@@ -1,0 +1,17 @@
+{
+  "skill": "experiment-bridge",
+  "run_id": "2026-08-17_run01",
+  "started_at": "2026-08-17T05:21:14Z",
+  "executor": "codex",
+  "executor_model": "gpt-5",
+  "executor_model_source": "caller-declared",
+  "executor_family": "openai",
+  "reviewer_model_source": "backend-reported",
+  "reviewer_family": "openai",
+  "reviewer_backend": "codex",
+  "native_evidence_id": null,
+  "native_evidence_path": null,
+  "family_relation": "same",
+  "independence_verified": false,
+  "project_dir": "/home/yk/ws/src/semantic_mapping"
+}

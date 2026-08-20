@@ -1,6 +1,7 @@
 import numpy as np
 from collections import deque
 from builtin_interfaces.msg import Time as TimeMsg
+from sensor_msgs.msg import Imu
 
 from semantic_mapping.runtime.ga_bsvm_node import (
     GABsvmNode,
@@ -150,6 +151,7 @@ def test_camera_matrix_scales_to_runtime_image_resolution():
 def make_motion_node(samples=()):
     node = object.__new__(GABsvmNode)
     node.imu_buffer = deque(samples, maxlen=1000)
+    node.imu_acceleration_scale = 1.0
     node.imu_window_sec = 0.15
     node.motion_angular_scale = 2.0
     node.motion_accel_scale = 3.0
@@ -169,6 +171,21 @@ def make_motion_node(samples=()):
         },
     )()
     return node, messages
+
+
+def test_imu_callback_converts_livox_g_to_si_acceleration():
+    node, _ = make_motion_node()
+    node.imu_acceleration_scale = 9.80665
+    message = Imu()
+    message.header.stamp.sec = 10
+    message.linear_acceleration.z = 1.0
+
+    node.imu_callback(message)
+
+    stamp_ns, angular_norm, acceleration_norm = node.imu_buffer[-1]
+    assert stamp_ns == 10_000_000_000
+    assert angular_norm == 0.0
+    assert acceleration_norm == 9.80665
 
 
 def test_missing_imu_motion_reliability_fails_closed():

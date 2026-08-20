@@ -770,7 +770,7 @@ def _inspect_runtime_message(state, topic_name, message):
         '/query_feature',
     }:
         expected_length = {
-            '/clip_logits': 144,
+            '/clip_logits': 156,
             '/clip_features': 6144,
             '/query_feature': 512,
         }[topic_name]

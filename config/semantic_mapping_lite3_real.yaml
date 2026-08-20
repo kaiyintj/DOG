@@ -152,6 +152,8 @@ ga_bsvm_node:
     motion_accel_scale: 3.0
     motion_min_reliability: 0.2
     motion_missing_reliability: 0.2
+    # Livox MID-360 SDK acceleration is in g; convert it to ROS SI units.
+    imu_acceleration_scale: 9.80665
     imu_gravity: 9.81
     density_scale: 8.0
     range_scale_m: 20.0

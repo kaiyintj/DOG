@@ -984,8 +984,11 @@ cd ~/ws/src/semantic_mapping
 
 bash scripts/run_lite3_offline_smoke.sh \
   --input \
-  ysc@192.168.1.103:/home/ysc/lite3_bags/lite3_concurrent_20260723_141216_KkOBA6
+  /home/yk/lite3_robot_captures/lite3_concurrent_20260726_202334_azggiT
 ```
+
+上述目录是当前电脑上已验证的正式原始归档。若只在机器狗上保留了数据，也可改用
+`ysc@192.168.1.103:/home/ysc/lite3_bags/绝对目录`，脚本会通过 SSH 复制。
 
 默认使用 CPU CLIP、`ROS_DOMAIN_ID=42`、`ROS_LOCALHOST_ONLY=1`、`0.10x`
 回放和查询词 `road`。约 67 秒的 Bag 需要约 11 分钟完成回放。只准备数据、不启动
@@ -1048,13 +1051,14 @@ ros2 bag info "$RUN_DIR/merged"
 (cd "$RUN_DIR" && sha256sum -c artifact_sha256.txt)
 ```
 
-准备成功后记住该目录，并在项目根目录执行一次完整烟测：
+准备成功后记住该目录，并在项目根目录执行一次完整烟测。远程输入的准备目录包含
+`raw/`，但本地输入只引用原始目录，不会创建 `$RUN_DIR/raw`。当前正式数据已经归档在
+电脑，因此完整烟测应继续使用同一个绝对原始路径：
 
 ```bash
-PREPARED_RUN_DIR="$RUN_DIR"
-
 bash scripts/run_lite3_offline_smoke.sh \
-  --input "$PREPARED_RUN_DIR/raw"
+  --input \
+  /home/yk/lite3_robot_captures/lite3_concurrent_20260726_202334_azggiT
 
 source ~/lite3_offline_runs/lite3_offline_current_run.env
 cat "$RUN_DIR/OVERALL"
@@ -1067,11 +1071,11 @@ cat "$RUN_DIR/OVERALL"
 
 必须留在电脑并再备份一份的内容：
 
-1. `--prepare-only` 生成的准备目录和随后完整烟测生成的运行目录都要保留。前者包含
-   `raw/`、`merged/` 和源数据哈希；后者包含 `output_bag/`、`logs/`、
-   `generated/`、`OVERALL`、manifest、图状态、哈希和全部验收报告。使用本地
-   `PREPARED_RUN_DIR/raw` 做完整烟测时，新目录不会重复复制 `raw/`，所以不能只保留
-   最后一个 `$RUN_DIR`；
+1. `--prepare-only` 生成的准备目录和随后完整烟测生成的运行目录都要保留。本地输入时
+   前者包含 `merged/`、源路径和源数据哈希，原始 Bag 继续保存在
+   `~/lite3_robot_captures`；远程输入时前者还包含 `raw/`。后者包含 `output_bag/`、`logs/`、
+   `generated/`、`OVERALL`、manifest、图状态、哈希和全部验收报告。本地原始归档、
+   prepare-only 目录和完整烟测目录用途不同，不能只保留最后一个 `$RUN_DIR`；
 2. `~/ws/src/semantic_mapping`、`~/ws/src/fast_lio` 和
    `~/ws/src/livox_ros_driver2` 的完整源码；工作区未提交文件不能只靠 Git HEAD；
 3. 当前电脑的 `~/ws/install`，不要在出差前执行清理；
