@@ -1,6 +1,6 @@
 # 当前版本状态
 
-更新日期：2026-08-13
+更新日期：2026-08-22
 
 本文描述 `~/ws` 当前工作区中的实际代码。后续讨论、实验和新对话应以本文、
 `RUNBOOK.md` 及当前源码为准，不再以旧聊天记录中的命令为准。
@@ -8,11 +8,26 @@
 ## 0. 新对话交接摘要
 
 新对话开始时，先阅读本文、[RUNBOOK.md](RUNBOOK.md) 和项目根目录的
-[README.md](../README.md)。当前最重要的交接信息如下：
+[README.md](../README.md)、[AGENTS.md](../AGENTS.md)。当前最重要的交接信息如下：
 
 若新对话的目标是继续 Lite3 实机迁移，还必须先阅读专用的
 [LITE3_REAL_HANDOFF.md](LITE3_REAL_HANDOFF.md)。其中冻结了当前最佳 Bag、电脑归档路径、
-下一条离线烟测命令和实机运动前门禁，优先级高于旧聊天中的临时命令。
+最新离线烟测结果、下一阶段任务和实机运动前门禁，优先级高于旧聊天中的临时命令。
+
+2026-08-21 的当前实机证据基线是：
+
+- 推荐静止 Bag：
+  `/home/yk/ws/lite3_bags/lite3_concurrent_20260818_203250_HsW1R7`；
+- 推荐离线烟测：
+  `/home/yk/ws/lite3_offline_runs/lite3_clip_smoke_20260821T020049Z_xLnEzN`（精简证据归档）；
+- `SENSOR_HEADER_ALIGNMENT=PASS`；
+- `ALGORITHM_STATIC_PASS_NON_GEOMETRIC`；
+- `CALIBRATION_STRUCTURE=NOT_READY`；
+- `MOTION_READY=NO`。
+
+该离线烟测使用 CPU CLIP，只验证静止数据上的 FAST-LIO、CLIP、GA-BSVM 和语义
+costmap 软件链；它不是 SegFormer 性能实验，不验证 LiDAR--相机投影几何，也不授权运动。
+B 盘精简归档保留报告、日志、配置和哈希，但不含 `merged/`、`output_bag/`，不能直接重放。
 
 - 代码已按用途分层：`semantic_mapping/runtime/` 放实际运行代码及其依赖的共用核心，
   `semantic_mapping/carla/` 只放 CARLA 仿真采集/评测代码；运行时目录不依赖 carla 目录，
@@ -68,14 +83,14 @@
   `test`，报告绑定 checkpoint SHA-256；缺少独立 test 时明确标为非正式结果；
 - 本轮等价完整回归为 `184 passed, 1 skipped`，flake8/pep257 均通过；单包
   `colcon build`、两个 Nav2 入口解析和实际图片离线推理均已通过；
-- Git 当前位于本地 `main`，基线 HEAD 为 `969affa`。本文新增的 Lite3 迁移修正仍在
-  未提交工作区，开始新实验前不要清理或覆盖这些修改；
-- 下一项明确任务是在全新进程和空 GA-BSVM 体素图中，使用
-  `school_parking_lot.world` 依次复测 `white truck` 和 `yellow truck`。旧算法曾错误输出
-  `(7.746, 3.25)`，落在红车附近；世界真值中红车约为 `(7.5, 4.5)`，白车约为
-  `(7.5, -4.5)`。本轮簇级颜色修复已通过自动测试，但尚未完成干净 Gazebo 实测验收；
-- 复测时还要确认 `nav_goal_bridge_node`、Nav2 action、`/cmd_vel` 和
-  `/cmd_vel_champ` 均有闭环输出，并确认黄车目标不再落到车辆另一侧。完整步骤见
+- Git 基线位于 B 盘本地 `main`，HEAD 为 `d27c103`，该提交已包含此前运行时、配置和
+  文档修正。A 盘文档来源 commit 为 `f9b75de`；当前未提交修改把它迁入 B 盘并适配精简
+  归档，未修改算法、配置或测试，用户最终审查前不得提交、推送或清理；
+- Lite3 当前下一阶段是外参、TF、SDK 安全桥和受控运动 Bag，不是重复静止烟测。Gazebo
+  仍有一项独立仿真回归待办：在全新进程和空 GA-BSVM 体素图中，用
+  `school_parking_lot.world` 复测 `white truck`/`yellow truck`，并确认
+  `nav_goal_bridge_node`、Nav2 action、`/cmd_vel`、`/cmd_vel_champ` 的闭环输出。该仿真
+  待办不替代 Lite3 标定与安全验收，步骤见
   [RUNBOOK 6.1](RUNBOOK.md#61-school-parking-lot-颜色与导航安全回归)。
 
 ## 1. 项目目标
@@ -120,8 +135,8 @@ CLIP 与 SegFormer 是两套可替换的语义前端，不应在同一次实验�
 | Gazebo 语义查询生成 `/goal_pose` | 已运行验证 |
 | Gazebo 语言查询自动触发 Nav2 | action 桥接已实现，等待本轮 Gazebo 闭环复测 |
 | Gazebo 主动感知速度调节 | 代码已接入，需定量实验验证收益 |
-| Lite3 实机传感器采集 | 70 秒三路并发录制、消息时间戳和 USB 检查已通过，接收调度存在 WARN |
-| Lite3 电脑离线结构烟测 | 自动准备/合并/回放/验收工具已实现，真实 Bag 端到端结果待运行 |
+| Lite3 实机传感器采集 | 2026-08-18 最佳 Bag 通过频率、计数、共同窗口和 header 审计；接收调度有 WARN |
+| Lite3 电脑离线结构烟测 | 2026-08-21 在干净 `d27c103` 上得到 `ALGORITHM_STATIC_PASS_NON_GEOMETRIC` |
 | Lite3 实机语义导航 | 配置已失败关闭；标定、定位 TF、运动安全桥和 Nav2 闭环未完成 |
 
 ## 3. 当前系统组成
@@ -335,33 +350,25 @@ LiDAR-相机外参仍是占位值，因此 `projection_calibration_verified` 必
   0/20/50/100/150 ms 时间偏移；五个可靠度因子共用 GA-BSVM 正式公式，并可调用
   同一 `VoxelMap` 做六组短序列消融。当前仅通过自动化与合成数据回归，尚未完成真实
   CARLA server 全规模采集和最终论文指标，不能提前宣称参数已标定；
-- Lite3 Jetson 已确认 Ubuntu 20.04/ROS 2 Foxy、Mid360 和 D435I 驱动可用；
-- Lite3 `/timefix/imu` 约 200 Hz、`/timefix/lidar` 约 10 Hz，D435I 原始 RGB
-  实录约 9.4 Hz，CameraInfo 与图像计数基本一致；
-- 已新增三个独立 recorder、实际消息预检、SQLite 自动验收、消息时间戳审计和 USB
-  分级检查工具；
-- 2026-07-23 完成 70 秒正式三路并发采集：四话题共同时间窗约 66.99 秒，三个
-  recorder 均正常定时退出，D435I 录制前后存在且内核 USB 检查通过；三路同时出现
-  0.46–0.74 秒 rosbag 接收调度告警；
-- 同一 Bag 的消息时间审计确认 IMU header 约 200 Hz、LiDAR header 约 10 Hz，均单调
-  且无零时间戳，LiDAR `timebase == header.stamp`；相机存在一次约 0.532 秒真实缺口，
-  当前数据结论为 `SENSOR_STATIC_PASS_WITH_WARN`；
-- 2026-07-26 的复测再次确认 IMU/LiDAR header 健康，但给 Image/CameraInfo 强制
-  `reliable`、`depth: 100` 会在原始 RGB 写盘吞吐低于发布频率时积压旧帧，末尾相机
-  header 最多落后 LiDAR 约 6.81 秒，1 ms 内 Image/CameraInfo 配对率仅 74%。录制脚本
-  已恢复使用相机发布者自身 QoS，并继续使用 `--max-cache-size 0`；该 Bag 保留作队列
-  积压回归样本，不能作为运动就绪证据；
-- 2026-07-26 随后使用 D435I 原生 `424x240@15Hz` 模式和修正后的相机 QoS 完成
-  67.5 秒四话题共同窗口采集：Image/CameraInfo 均为 1014 条、header 配对率 100%，
-  LiDAR–图像最近时间差 p99 约 32.9 ms、最大约 33.3 ms，LiDAR 周围 IMU 覆盖率
-  100%，严格结论为 `SENSOR_HEADER_ALIGNMENT=PASS`。rosbag 接收时间仍有
-  0.52–0.69 秒调度间隔，但消息 header 连续（IMU 最大约 12.2 ms、LiDAR 最大约
-  103.8 ms、相机最大约 66.8 ms），因此记录为接收调度警告，不解释为传感器断流；
-  LiDAR 到相机光学坐标系的静态 TF 仍缺失，故 `CALIBRATION_STRUCTURE=NOT_READY`、
+- Lite3 Jetson 已确认 Ubuntu 20.04/ROS 2 Foxy、Mid360 和 D435I 驱动可用；三个独立
+  recorder、实际消息预检、SQLite 自动验收、时间戳审计和 USB 分级检查工具均已实现；
+- 2026-08-18 的推荐 Bag 记录 13545 条 IMU、679 条 LiDAR、1014 条 Image 和 1014 条
+  CameraInfo，四话题共同接收窗口约 67.544 秒；频率约为 200.006、10.008、14.990、
+  14.989 Hz，三个 recorder 均按预期超时结束；
+- 该 Bag 的 Image/CameraInfo 在 1 ms 内配对率为 100%。共同窗口内 LiDAR--图像最近
+  header 时间差 p99 约 32.6 ms、最大约 33.3 ms；IMU、LiDAR、Image、CameraInfo 的
+  header 最大间隔分别约为 16.1、103.1、68.1、68.1 ms，均通过严格门限。rosbag 接收
+  时间仍有 0.43--0.68 秒调度间隔，只记录为接收调度 WARN；
+- `/tf_static` 仍没有 `rslidar -> camera_color_optical_frame` 链路，故严格状态保持
+  `SENSOR_HEADER_ALIGNMENT=PASS`、`CALIBRATION_STRUCTURE=NOT_READY`、
   `MOTION_READY=NO`；
-- 已增加开发电脑离线结构烟测：单一合并 Bag、隔离 DDS、FAST-LIO + CPU CLIP +
-  GA-BSVM 自动编排、定向清理和输出验收。工具通过测试后仍需用上述真实 Bag 运行，
-  结果上限为 `ALGORITHM_STATIC_PASS_NON_GEOMETRIC`。
+- 2026-08-21 的推荐离线烟测在干净 `d27c103` 上通过：FAST-LIO odometry 约 10 Hz，
+  有效持续约 56.9 秒，最终平移约 0.0278 m、最大半径约 0.0296 m；输出 13 对精确
+  时间戳配对的 semantic/uncertainty clouds、67 条 semantic costmap，且运行图中
+  `/cmd_vel` 发布者为 0；
+- 该结果严格记为 `ALGORITHM_STATIC_PASS_NON_GEOMETRIC`。它保留外参未验证、
+  `motion_ready=false` 和无运动执行端的安全边界，不能评价语义地图几何精度或授权机器狗
+  行走。
 
 上述 M2DGR 坐标证明“查询 -> 聚类 -> 目标表面簇位置 -> 安全接近点”接口已经工作，但没有
 物体真值，不能据此宣称定位误差达标；Bag 也没有机器人执行器，不能验证导航成功率。
@@ -402,22 +409,31 @@ SciPy 1.11.4，并为 SegFormer/CLIP 分开声明模型依赖；当前全局环�
 
 ## 8. 推荐的下一阶段顺序
 
-1. 先用正式 Lite3 静止 Bag 完成电脑端
-   `ALGORITHM_STATIC_PASS_NON_GEOMETRIC` 烟测；
-2. 在进入实机 reliability 融合前，先保留 Motion V2 为诊断量；验收
+1. 保留 2026-08-18 推荐 Bag 和 2026-08-21 推荐离线烟测为当前静止基线，不重复采集
+   同配置静止数据，除非安装、驱动或传感器模式发生变化；
+2. 保存真实 TF 树，完成并验收 `rslidar -> camera_color_optical_frame` 外参；在进入
+   实机 reliability 融合前只把 Motion V2 保留为诊断量。验收
    Camera/LiDAR 时间戳、CameraInfo、静态 TF 和 LiDAR-相机外参后，才把
    `projection_calibration_verified` 改为 `true`；
-3. 修复 CLIP 源时间戳后，使用 `fast_lio_lite3_real.yaml` 采集并验证受控低速运动 Bag；
-4. 先完成已实现 Nav2 action 事务和簇级颜色查询的 Gazebo 闭环验收，再实现语义查询
+3. 明确唯一 `odom -> base_link` 权威源，调查云深处官方 SDK 的模式、状态、急停和速度
+   接口，并实现 `/cmd_vel_lite3_safe` 的唯一安全桥；
+4. 修复或隔离 CLIP 源时间戳问题后，使用 `fast_lio_lite3_real.yaml` 采集并验证受控低速
+   运动 Bag；
+5. 先完成已实现 Nav2 action 事务和簇级颜色查询的 Gazebo 闭环验收，再实现语义查询
    随地图增长自动重试；
-5. 解决 Gazebo/Lite3 单一里程计与 TF 权威源；
-6. 完成运动安全桥后，才进行架空、低速空场和障碍环境实机测试。
+6. 完成标定、TF、受控运动 Bag 和运动安全桥后，才进行架空、低速空场和障碍环境实机
+   测试。
 
 完整运行步骤见 [RUNBOOK.md](RUNBOOK.md)。
 
 ## 9. Git 状态说明
 
-本文更新时，`~/ws/src/semantic_mapping` 位于本地 `main`，基线 HEAD 为 `969affa`。
-2026-08-08 的 CameraInfo/投影失败关闭、Lite3 速度链、可重写 Nav2 里程计话题以及
-`fast_lio_lite3_real.yaml` 仍是尚未提交的工作区修改。新实验开始前应先完成一次明确的
-提交和远端备份，否则 Git HEAD 不能代表本文描述的版本。
+B 盘 `~/ws/src/semantic_mapping` 位于本地 `main`，基线 HEAD 为
+`d27c1032f97d8e744c3ee2f2ef196c00ea6bac7e`；迁移开始前工作区干净。该提交已包含
+CameraInfo/投影失败关闭、Lite3 速度链、Nav2 里程计配置、离线烟测工具和 CARLA
+诊断记录。
+
+当前未提交修改以 A 盘 `f9b75de` 为文档来源，并进一步把 README、PROJECT_STATUS、
+LITE3_REAL_HANDOFF、RUNBOOK、AGENTS、MANIFEST 和默认搜索规则适配到 B 盘的实际路径与
+精简烟测归档；未修改算法源码、正式 YAML 或测试。用户最终审查前不要提交、推送、
+覆盖或清理这些修改。

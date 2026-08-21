@@ -1,6 +1,6 @@
 # 运行手册
 
-更新日期：2026-08-13
+更新日期：2026-08-22
 
 本手册只描述 `~/ws` 当前代码可以实际执行的流程。系统能力边界见
 [PROJECT_STATUS.md](PROJECT_STATUS.md)。
@@ -984,10 +984,10 @@ cd ~/ws/src/semantic_mapping
 
 bash scripts/run_lite3_offline_smoke.sh \
   --input \
-  /home/yk/lite3_robot_captures/lite3_concurrent_20260726_202334_azggiT
+  /home/yk/ws/lite3_bags/lite3_concurrent_20260818_203250_HsW1R7
 ```
 
-上述目录是当前电脑上已验证的正式原始归档。若只在机器狗上保留了数据，也可改用
+上述目录是 2026-08-21 当前推荐的电脑原始归档。若只在机器狗上保留了数据，也可改用
 `ysc@192.168.1.103:/home/ysc/lite3_bags/绝对目录`，脚本会通过 SSH 复制。
 
 默认使用 CPU CLIP、`ROS_DOMAIN_ID=42`、`ROS_LOCALHOST_ONLY=1`、`0.10x`
@@ -1027,55 +1027,66 @@ Git/ROS 环境、每个进程的独立日志和 JSON/TXT 验收报告。状态�
 - `PREPARED`：`--prepare-only` 成功。
 
 即使得到 `ALGORITHM_STATIC_PASS_NON_GEOMETRIC`，也只证明离线软件链能处理这份静止
-数据。当前 LiDAR-相机外参仍是占位值，CLIP 网格消息没有源图 Header，GA-BSVM 也尚未
-按点云时刻查询完整 `odom <- lidar_frame` 变换，因此该结果不能评价语义地图几何精度，
-不能授权机器狗行走。
+数据。当前 LiDAR-相机外参仍未标定验收，CLIP 网格消息没有源图 Header；GA-BSVM 已按
+点云时刻查询历史 TF 并使用有界重试队列，但该机制仍需受控运动 Bag 验证真实 frame、
+命中率和掉帧统计。因此该结果不能评价语义地图几何精度，不能授权机器狗行走。
 
-### 8.9 离开机器狗前的电脑资料清单
+### 8.9 离线复现与迁移备份清单
 
-若之后只能携带开发电脑，离开前至少完成一次 8.8 节的 `--prepare-only`，确认真实
-Bag 已完整复制到电脑。随后应再以电脑上的 `raw` 目录作为输入完成一次完整烟测；这会
-在强制离线模式下实际加载 CLIP 权重并启动 FAST-LIO、CLIP 和 GA-BSVM，可提前暴露
-缺包、缺模型或 overlay 不完整。先检查准备结果：
+2026-08-18 推荐 Bag 已迁入 B 盘，2026-08-21 完整烟测已经在干净 `d27c103` 上通过。
+B 盘只保留约 1.2 MiB 的精简证据目录：manifest、源路径、日志、配置、运行图、状态、
+验收报告和哈希账本均保留，体积较大的 `merged/` 与 `output_bag/` 未迁入。因此它可验证
+历史运行结论和实现来源，但不能直接重放或重新计算输出。先执行以下只读检查：
 
 ```bash
-source ~/lite3_offline_runs/lite3_offline_current_run.env
+set -e
 
-test -f "$RUN_DIR/OVERALL"
-test "$(cat "$RUN_DIR/OVERALL")" = PREPARED
-test -f "$RUN_DIR/merged/metadata.yaml"
-test -f "$RUN_DIR/source_sha256.txt"
+PROJECT_DIR=/home/yk/ws/src/semantic_mapping
+SOURCE_DIR=/home/yk/ws/lite3_bags/lite3_concurrent_20260818_203250_HsW1R7
+RUN_DIR=/home/yk/ws/lite3_offline_runs/lite3_clip_smoke_20260821T020049Z_xLnEzN
 
-du -sh "$RUN_DIR"
-ros2 bag info "$RUN_DIR/merged"
-(cd "$RUN_DIR" && sha256sum -c artifact_sha256.txt)
+test "$(cat "$RUN_DIR/OVERALL")" = ALGORITHM_STATIC_PASS_NON_GEOMETRIC
+for file in manifest.json input_validation.json merge_validation.json \
+  smoke_validation.json model_preflight.json runtime_graph.json \
+  timestamp_audit.txt source_sha256.txt implementation_sha256.txt \
+  artifact_sha256.txt logs/model_preflight.log; do
+  test -f "$RUN_DIR/$file"
+done
+
+python3 -c 'import json,sys; m=json.load(open(sys.argv[1])); assert m["git_sha"] == "d27c1032f97d8e744c3ee2f2ef196c00ea6bac7e"; assert m["git_dirty"] is False; assert m["overall"] == "ALGORITHM_STATIC_PASS_NON_GEOMETRIC"; assert m["calibration_status"] == "INTRINSICS_FROM_BAG_EXTRINSICS_UNVERIFIED"; assert m["motion_ready"] is False' "$RUN_DIR/manifest.json"
+(cd "$SOURCE_DIR" && sha256sum --quiet -c "$RUN_DIR/source_sha256.txt")
+(cd "$RUN_DIR" && sha256sum --quiet --ignore-missing -c artifact_sha256.txt)
+(cd "$PROJECT_DIR" && sha256sum --quiet -c "$RUN_DIR/implementation_sha256.txt")
 ```
 
-准备成功后记住该目录，并在项目根目录执行一次完整烟测。远程输入的准备目录包含
-`raw/`，但本地输入只引用原始目录，不会创建 `$RUN_DIR/raw`。当前正式数据已经归档在
-电脑，因此完整烟测应继续使用同一个绝对原始路径：
+`artifact_sha256.txt` 是完整 A 盘运行的原始账本，仍列出未迁入的两个大目录，因此必须
+使用 `--ignore-missing`；前面的显式文件清单保证精简归档的关键证据确实存在。manifest
+和 `source_path.txt` 中的 `/home/yk/lite3_*` 是原始运行来源记录，不应改成 B 盘路径。
+
+只有在代码、依赖或工作区发生变化而需要验证重建环境时，才重新运行完整烟测。使用本地
+输入时脚本只引用原始目录，不会创建 `$RUN_DIR/raw`；继续使用同一个不可变原始路径：
 
 ```bash
 bash scripts/run_lite3_offline_smoke.sh \
   --input \
-  /home/yk/lite3_robot_captures/lite3_concurrent_20260726_202334_azggiT
+  /home/yk/ws/lite3_bags/lite3_concurrent_20260818_203250_HsW1R7
 
 source ~/lite3_offline_runs/lite3_offline_current_run.env
 cat "$RUN_DIR/OVERALL"
 ```
 
-理想结果为 `ALGORITHM_STATIC_PASS_NON_GEOMETRIC`。如果完整算法烟测尚有待修的软件
-失败，也必须至少确认 `logs/model_preflight.log` 中出现
+预期结果仍为 `ALGORITHM_STATIC_PASS_NON_GEOMETRIC`。如果重建环境后的完整算法烟测
+失败，必须检查与 2026-08-21 推荐运行的 manifest、实现文件和依赖差异，并至少确认
+`logs/model_preflight.log` 中出现
 `CLIP_OFFLINE_PREFLIGHT=PASS`，并检查 `model_preflight.json` 已记录模型权重实际
 路径、大小和 SHA256；在出发前解决缺少的依赖或权重。
 
 必须留在电脑并再备份一份的内容：
 
-1. `--prepare-only` 生成的准备目录和随后完整烟测生成的运行目录都要保留。本地输入时
-   前者包含 `merged/`、源路径和源数据哈希，原始 Bag 继续保存在
-   `~/lite3_robot_captures`；远程输入时前者还包含 `raw/`。后者包含 `output_bag/`、`logs/`、
-   `generated/`、`OVERALL`、manifest、图状态、哈希和全部验收报告。本地原始归档、
-   prepare-only 目录和完整烟测目录用途不同，不能只保留最后一个 `$RUN_DIR`；
+1. 必须保留 B 盘不可变原始 Bag 与当前精简烟测证据目录。两者共同保留输入数据、运行
+   结论、配置、日志、实现绑定和哈希，但精简目录不能替代可重放的完整运行；若未来因
+   代码或环境变化重新执行烟测，应另行保留该次新生成的完整 `merged/`、`output_bag/`
+   和报告。当前推荐原始 Bag 位于 `/home/yk/ws/lite3_bags`；
 2. `~/ws/src/semantic_mapping`、`~/ws/src/fast_lio` 和
    `~/ws/src/livox_ros_driver2` 的完整源码；工作区未提交文件不能只靠 Git HEAD；
 3. 当前电脑的 `~/ws/install`，不要在出差前执行清理；
@@ -1107,7 +1118,7 @@ git -C ~/ws/src/semantic_mapping diff \
 自己的仓库。给完整 `$RUN_DIR`、源码归档和 CLIP 模型归档生成 SHA256；复制到移动
 硬盘或另一块磁盘后执行 `sha256sum -c` 验证。不能只保留电脑内的一份。
 
-没有机器狗的两周内可以继续做：离线 FAST-LIO/CLIP/GA-BSVM 回放、自动验收、查询逻辑、
+没有机器狗时可以继续做：离线 FAST-LIO/CLIP/GA-BSVM 回放、自动验收、查询逻辑、
 合成故障 Bag、性能统计和文档整理。不能完成：D435I/Mid360 USB 稳定性复测、真实静态
 TF/外参测量、底盘控制桥、急停、实机 Nav2 和任何运动安全验收。
 

@@ -1,0 +1,24 @@
+# Historical feasibility/review documents. Their current conclusions have been
+# consolidated into PROJECT_STATUS, THESIS_PROPOSAL and the active runbook.
+docs/segformer_smoke_test.md
+docs/SYSTEM_REVIEW_REPORT.md
+docs/INNOVATION_METHOD_REVIEW.md
+
+# Immutable ARIS/CARLA planning snapshots. The un-timestamped current
+# plan/tracker remain searchable.
+refine-logs/EXPERIMENT_PLAN_*.md
+refine-logs/EXPERIMENT_TRACKER_*.md
+refine-logs/P1_OFFLINE_DIAGNOSTIC_TRACE*.md
+refine-logs/CARLA_CRASH_DIAG_PLAN_*.md
+refine-logs/CARLA_CRASH_DIAG_TRACKER_*.md
+refine-logs/EXPERIMENT_CODE_REVIEW.md
+
+# Historical planner prompts and the two old A-computer environment ledgers.
+# These remain tracked for audit but are not current B-computer sources.
+.aris/traces/
+.aris/compute/local.md
+.aris/compute/env_spec.yaml
+
+# Git reflogs and FETCH_HEAD contain old branch names and commits; they are
+# repository metadata rather than current project documentation.
+.git/

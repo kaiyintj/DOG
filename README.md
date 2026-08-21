@@ -15,6 +15,12 @@ The status document distinguishes implemented code from validated behavior and
 known deployment gaps. Its `新对话交接摘要` section is the handoff point for a
 new conversation. Use it instead of commands copied from older chats.
 
+Historical review reports, timestamped planning snapshots and ARIS traces are
+kept for audit, but are excluded from the default repository search by
+`.rgignore`. They are not current status sources. For current paper claims use
+`docs/THESIS_PROPOSAL.md` and `idea-stage/docs/research_contract.md`; for current
+execution use the un-timestamped plan/tracker under `refine-logs/`.
+
 ## Code layout
 
 Python sources are split inside the package:
@@ -164,7 +170,7 @@ computer:
 ```bash
 bash scripts/run_lite3_offline_smoke.sh \
   --input \
-  /home/yk/lite3_robot_captures/lite3_concurrent_20260726_202334_azggiT
+  /home/yk/ws/lite3_bags/lite3_concurrent_20260818_203250_HsW1R7
 ```
 
 The runner copies or references the immutable source bags, merges the four
@@ -173,10 +179,17 @@ GA-BSVM under an isolated ROS domain. It never starts Nav2, active perception
 or a robot command bridge. A successful result is deliberately named
 `ALGORITHM_STATIC_PASS_NON_GEOMETRIC`: it verifies the offline software chain,
 not camera-LiDAR calibration, map accuracy or readiness to move the robot.
-Before working away from the robot, follow the
-[travel checklist](docs/RUNBOOK.md#89-离开机器狗前的电脑资料清单) so the
-raw capture, model cache, robot-side configuration and hardware evidence are
-available offline.
+The canonical 2026-08-21 run is
+`/home/yk/ws/lite3_offline_runs/lite3_clip_smoke_20260821T020049Z_xLnEzN`.
+It passed on clean semantic-mapping commit `d27c103`, while calibration remained
+unverified and `motion_ready` remained false. The B-disk copy is a compact
+evidence archive: reports, logs, generated configuration, manifests and hashes
+are retained, while the reproducible `merged/` and `output_bag/` payloads are
+intentionally omitted. The immutable source bags remain available separately.
+For migration or offline recovery, follow the
+[offline reproduction and migration checklist](docs/RUNBOOK.md#89-离线复现与迁移备份清单)
+so the raw capture, canonical smoke result, model cache, robot-side
+configuration and hardware evidence remain available.
 
 ## SegFormer fusion backend
 

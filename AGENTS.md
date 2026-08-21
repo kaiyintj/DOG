@@ -69,19 +69,26 @@ p2_auto_deploy: false
 - 端口被占用时先识别进程。禁止 `pkill`、`killall` 和无法确认归属的终止操作。
 - 状态只使用 `PASS`、`FAIL`、`BLOCKED`、`INVALID`、`NOT_RUN`；tracker 初始状态保持 `TODO`。其中 `FAIL` 默认表示已得到可用但未达质量门的负结果，不传播停止；`BLOCKED`/`INVALID`/执行失败只阻断实际依赖该产物的 run。
 
-## 工作树保护基线（2026-08-17 13:03 +0800）
+## 工作树保护基线（2026-08-22，B 盘迁移）
 
-基线 commit：`963aa693eabcece9f3b9c07aa4cc326ebc673000`
+算法与实验基线 commit 为
+`d27c1032f97d8e744c3ee2f2ef196c00ea6bac7e`。A 盘文档来源为分支
+`docs/lite3-handoff-20260821` 的 commit
+`f9b75ded0d5d8cbe207d22c5491b04800b1f8801`；该提交只同步 Lite3 Bag/离线烟测证据、
+交接入口和默认搜索规则，不改变算法源码、正式 YAML、测试或既有实验结论。
 
-执行开始时重新记录 `git status --short --branch`；当前已知用户修改/未跟踪文件如下，均不得覆盖或清理：
+用户已授权把上述文档变更迁入 B 盘并适配 B 盘精简归档，以及移除与时间戳副本逐字节相同的
+`refine-logs/P1_OFFLINE_DIAGNOSTIC_TRACE.md` alias；规范审计副本
+`P1_OFFLINE_DIAGNOSTIC_TRACE_20260817_135410.md` 必须保留。当前修改须保持未提交，等待
+用户最终审查；该授权不包括删除或移动其他历史文件，也不包括提交或推送。
 
-```text
- M README.md
- M docs/PROJECT_STATUS.md
- M docs/RUNBOOK.md
- M scripts/run_lite3_offline_smoke.sh
- M scripts/verify_lite3_offline_smoke.py
- M test/test_lite3_offline_smoke.py
-?? docs/CARLA_AUTONOMOUS_TEST_PLAN.md
-?? docs/LITE3_REAL_HANDOFF.md
-```
+历史审查、时间戳 plan/tracker、规范 P1 trace 与 `.aris` 记录仍受 Git 跟踪，只通过
+`.rgignore` 从默认全文搜索中排除。执行任何新任务前必须重新记录
+`git status --short --branch`；上述获批迁移文件是当前预期 dirty 内容，任何其他新增
+dirty 内容均应先视为用户修改并保护。
+
+B 盘当前不可变原始 Bag 位于
+`/home/yk/ws/lite3_bags/lite3_concurrent_20260818_203250_HsW1R7`，精简烟测证据位于
+`/home/yk/ws/lite3_offline_runs/lite3_clip_smoke_20260821T020049Z_xLnEzN`。精简目录故意
+不含 `merged/` 和 `output_bag/`；其历史 manifest/source_path 中的 A 盘路径属于运行时
+来源记录，不得改写。验证方法以 `docs/RUNBOOK.md` 第 8.9 节为准。
