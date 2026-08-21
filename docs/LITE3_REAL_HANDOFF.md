@@ -1,6 +1,6 @@
 # Lite3 实机下一阶段交接
 
-更新日期：2026-08-16
+更新日期：2026-08-21
 
 本文是开启新 Codex 窗口时的 Lite3 专用交接入口。新窗口应先读本文，再按需查阅
 [PROJECT_STATUS.md](PROJECT_STATUS.md) 和 [RUNBOOK.md](RUNBOOK.md)。旧聊天中的临时命令、
@@ -14,59 +14,64 @@
 - Mid360 点云 `/timefix/lidar` 约 10 Hz，Mid360 IMU `/timefix/imu` 约 200 Hz；
 - D435I 使用 `424x240@15Hz` 彩色和深度启动模式时，彩色图像和 CameraInfo 可稳定录制；
 - 三个独立 recorder、SQLite 检查、频率验收、消息时间戳审计和 USB 分级检查工具已经实现；
-- 2026-07-26 最佳静止 Bag 的四路消息频率、计数、共同时间窗和 header 连续性通过；
-- 录包接收时间有 0.52--0.69 秒调度间隔，只记为 `PASS_WITH_RECEIPT_WARN`；消息自身
-  header 连续，因此不是 0.5 秒传感器断流；
-- Image 与 CameraInfo 在 1 ms 内匹配率为 100%，LiDAR 到最近图像的 p99 时间差约
-  32.9 ms，所有 LiDAR 帧周围都有 IMU；
+- 2026-08-18 推荐静止 Bag 的四路消息频率、计数、共同时间窗和 header 连续性通过；
+- 录包接收时间有 0.43--0.68 秒调度间隔，只记为 `PASS_WITH_RECEIPT_WARN`；消息自身
+  header 连续，因此不解释为传感器断流；
+- Image 与 CameraInfo 在 1 ms 内匹配率为 100%，共同窗口内 LiDAR 到最近图像的 p99
+  时间差约 32.6 ms；
 - CameraInfo 内参稳定，但 `/tf_static` 中仍没有 `rslidar -> camera_color_optical_frame`
-  链路。
+  链路；
+- 2026-08-21 已在开发电脑上用该 Bag 完成 FAST-LIO + CPU CLIP + GA-BSVM 离线烟测，
+  并得到 `ALGORITHM_STATIC_PASS_NON_GEOMETRIC`；
+- 烟测运行图中 `/cmd_vel` 发布者为 0，没有启动 Nav2、主动感知或运动桥。
 
 当前严格状态为：
 
 ```text
 SENSOR_HEADER_ALIGNMENT=PASS
+ALGORITHM_STATIC_PASS_NON_GEOMETRIC
 CALIBRATION_STRUCTURE=NOT_READY
 MOTION_READY=NO
 ```
 
-因此，现在可以继续做静止数据的电脑离线算法烟测，但不能据此让机器狗行走。
+因此，静止采集和电脑离线软件链已经形成可复现基线；下一步转向外参、TF、SDK 安全桥
+和受控运动 Bag，仍不能据此让机器狗行走。
 
 ## 2. 当前必须保留的数据
 
-电脑上的正式原始数据归档是：
+电脑上的推荐原始数据归档是：
 
 ```text
-/home/yk/lite3_robot_captures/lite3_concurrent_20260726_202334_azggiT
+/home/yk/lite3_bags/lite3_concurrent_20260818_203250_HsW1R7
 ```
 
-该目录约 562 MiB，是当前离线实验的唯一推荐输入，不要修改或删除。主要统计为：
+该目录约 563 MiB，是当前静止离线实验的推荐输入，不要修改或删除。主要统计为：
 
 | 话题 | 消息数 | 频率 | header 最大间隔 |
 | --- | ---: | ---: | ---: |
-| `/timefix/imu` | 13558 | 200.000 Hz | 0.0122 s |
-| `/timefix/lidar` | 677 | 10.000 Hz | 0.1038 s |
-| `/camera/color/image_raw` | 1014 | 14.992 Hz | 0.0668 s |
-| `/camera/color/camera_info` | 1014 | 14.990 Hz | 0.0668 s |
+| `/timefix/imu` | 13545 | 200.006 Hz | 0.0161 s |
+| `/timefix/lidar` | 679 | 10.008 Hz | 0.1031 s |
+| `/camera/color/image_raw` | 1014 | 14.990 Hz | 0.0681 s |
+| `/camera/color/camera_info` | 1014 | 14.989 Hz | 0.0681 s |
 
-四话题共同时间窗约 67.437 秒。机器狗上的原始副本是：
+四话题共同接收时间窗约 67.544 秒。机器狗上的原始副本是：
 
 ```text
-/home/ysc/lite3_bags/lite3_concurrent_20260726_202334_azggiT
+/home/ysc/lite3_bags/lite3_concurrent_20260818_203250_HsW1R7
 ```
 
 目录用途不要混淆：
 
-- `/home/yk/lite3_robot_captures`：机器狗原始 Bag 的电脑归档，相当于实验“底片”，必须保留；
+- `/home/yk/lite3_bags`：机器狗原始 Bag 的电脑归档，相当于实验“底片”，必须保留；
 - `/home/yk/lite3_offline_runs`：脚本生成的合并 Bag、日志和结果，可按单次运行清理；
-- 当前旧离线目录
-  `/home/yk/lite3_offline_runs/lite3_clip_smoke_20260726T104318Z_k1GU5P`
-  使用的是旧 Bag，结果为 `FAIL`，不能代表上述最佳 Bag。
+- 当前推荐离线结果是
+  `/home/yk/lite3_offline_runs/lite3_clip_smoke_20260821T020049Z_xLnEzN`，其 manifest
+  绑定 `d27c103`、上述输入路径、`git_dirty=false` 和
+  `ALGORITHM_STATIC_PASS_NON_GEOMETRIC`。
 
-最佳原始 Bag 目录内原有的 `validation.txt` 是阈值修正前生成的历史报告，其中 IMU
-接收间隔 0.521 秒被旧规则误判为失败。用当前
-`scripts/verify_lite3_capture.py` 复验的结果是基础 `OVERALL=PASS` 并带四路接收调度
-警告；严格 header 审计仍为 `SENSOR_HEADER_ALIGNMENT=PASS`。
+推荐 Bag 的基础验收为 `OVERALL=PASS`，并带四路接收调度警告；严格 header 审计为
+`SENSOR_HEADER_ALIGNMENT=PASS`。审计同时确认 `/tf_static` 缺少 LiDAR 到相机光学帧的
+链路，因此不能把静止软件链通过解释成投影标定通过。
 
 ## 3. 当前代码入口
 
@@ -87,54 +92,29 @@ MOTION_READY=NO
 - 实机语义配置：`config/semantic_mapping_lite3_real.yaml`；
 - 完整传感器和离线命令：[RUNBOOK 第 8 节](RUNBOOK.md#8-lite3-实机传感器采集与上机前清单)。
 
-截至本文写入时，本地 Git 分支为 `agent/carla-motion-v2-results`，HEAD 为 `963aa69`。
-本文以及 README、PROJECT_STATUS、RUNBOOK 的交接链接是当前未提交文档修改；除此之外
-本次核对未发现其他工作区改动。新窗口开始时仍需重新运行 `git status --short`，不要
-假设状态不会变化，也不要清理这些交接文档。
+本轮文档更新开始前，本地 Git 分支为 `main`，HEAD 为 `d27c103`，工作区干净。当前
+README、PROJECT_STATUS、本文、RUNBOOK、AGENTS、MANIFEST 和 `.rgignore` 的本地修改是
+为了同步 2026-08-18 至 2026-08-21 的证据并减少历史文件对默认搜索的干扰；不要把这些
+修改误当成算法改动，也不要在用户审阅前清理。
 
 ## 4. 新窗口首先执行的任务
 
-下一步不是发布运动命令，而是在电脑端用最佳 Bag 完成一次完整离线烟测。先做
-`--prepare-only`：
+不要重复运行已经通过的静止烟测，除非代码、依赖、传感器安装、驱动或录制模式发生
+变化。新窗口应先只读核对推荐 Bag 与推荐 smoke 的 manifest/验收报告，然后按以下顺序
+推进：
 
-```bash
-source /opt/ros/humble/setup.bash
-source /home/yk/ws/install/setup.bash
-cd /home/yk/ws/src/semantic_mapping
+1. 保存机器狗真实 TF 树，核对 `rslidar`、`camera_color_optical_frame`、`base_link`、
+   `odom` 的来源和父子关系；
+2. 完成 `rslidar -> camera_color_optical_frame` 外参标定，并用多距离、多方位目标做
+   重投影验收；
+3. 明确唯一 `odom -> base_link` 权威发布者；
+4. 只读调查云深处官方 SDK 的运动模式、状态反馈、急停和速度命令接口，设计
+   `/cmd_vel_lite3_safe` 的唯一安全桥；
+5. 标定、TF 和安全桥设计通过审查后，再设计受控运动 Bag，验证
+   `fast_lio_lite3_real.yaml`，仍不直接启动 Nav2 闭环。
 
-bash scripts/run_lite3_offline_smoke.sh \
-  --input /home/yk/lite3_robot_captures/lite3_concurrent_20260726_202334_azggiT \
-  --prepare-only
-
-source /home/yk/lite3_offline_runs/lite3_offline_current_run.env
-printf 'RUN_DIR=%s\n' "$RUN_DIR"
-cat "$RUN_DIR/OVERALL"
-```
-
-只有输出 `PREPARED` 才继续完整烟测。完整烟测仍直接使用正式原始归档路径；本地输入的
-prepare-only 运行不会创建 `$RUN_DIR/raw`，不要再把 `/raw` 当作输入：
-
-```bash
-source /opt/ros/humble/setup.bash
-source /home/yk/ws/install/setup.bash
-cd /home/yk/ws/src/semantic_mapping
-
-bash scripts/run_lite3_offline_smoke.sh \
-  --input /home/yk/lite3_robot_captures/lite3_concurrent_20260726_202334_azggiT
-
-source /home/yk/lite3_offline_runs/lite3_offline_current_run.env
-printf 'RUN_DIR=%s\n' "$RUN_DIR"
-cat "$RUN_DIR/OVERALL"
-```
-
-该回放默认是 0.10 倍速，约需 11 分钟。理想输出为：
-
-```text
-ALGORITHM_STATIC_PASS_NON_GEOMETRIC
-```
-
-它只证明 FAST-LIO、CLIP 和 GA-BSVM 能处理这份静止数据，不证明投影几何正确，也不
-授权运动。
+任何新任务都必须保留 `projection_calibration_verified=false`、
+`goal_bridge_enabled=false` 和无 SDK 执行端的当前失败关闭状态，直到对应硬件验收完成。
 
 ## 5. 再次连接机器狗时开几个终端
 
@@ -145,7 +125,7 @@ ALGORITHM_STATIC_PASS_NON_GEOMETRIC
 2. 终端 2 按 [RUNBOOK 8.3](RUNBOOK.md#83-终端-2d435i) 启动并保持 D435I；
 3. 终端 3 执行 `bash ~/lite3_tools/record_lite3_sensors.sh`。
 
-这三个终端只负责传感器和录包，不会让机器狗运动。当前最佳 Bag 已满足静止采集要求，
+这三个终端只负责传感器和录包，不会让机器狗运动。当前推荐 Bag 已满足静止采集要求，
 除非设备安装、驱动配置或传感器模式发生变化，否则没有必要重复采集同一种静止数据。
 
 下一次真正有价值的实机会话，应优先做以下只读或静止工作：
@@ -182,8 +162,11 @@ ALGORITHM_STATIC_PASS_NON_GEOMETRIC
 /home/yk/ws/src/semantic_mapping/docs/RUNBOOK.md 的第 8 节。
 
 当前从 LITE3_REAL_HANDOFF.md 第 4 节继续。先在电脑端用
-/home/yk/lite3_robot_captures/lite3_concurrent_20260726_202334_azggiT
-运行 prepare-only 和完整离线烟测，分析实际输出。不要发布任何运动命令，不要启动
-Nav2 实机闭环，也不要把 ALGORITHM_STATIC_PASS_NON_GEOMETRIC 当成 MOTION_READY。
-如果进入机器狗接口调查，先做只读检查并给出每个终端的精确命令。
+/home/yk/lite3_bags/lite3_concurrent_20260818_203250_HsW1R7
+和
+/home/yk/lite3_offline_runs/lite3_clip_smoke_20260821T020049Z_xLnEzN
+作为当前静止基线。烟测已经得到 ALGORITHM_STATIC_PASS_NON_GEOMETRIC，不要重复运行，
+也不要把它当成 MOTION_READY。下一步只读检查真实 TF 树、LiDAR--相机外参结构和云深处
+SDK 接口；不要发布运动命令，不要启动 Nav2 实机闭环，不要修改
+projection_calibration_verified=false 或 goal_bridge_enabled=false。
 ```

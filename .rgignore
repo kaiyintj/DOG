@@ -1,0 +1,20 @@
+# Historical feasibility/review documents. Their current conclusions have been
+# consolidated into PROJECT_STATUS, THESIS_PROPOSAL and the active runbook.
+docs/segformer_smoke_test.md
+docs/SYSTEM_REVIEW_REPORT.md
+docs/INNOVATION_METHOD_REVIEW.md
+
+# Immutable ARIS planning snapshots. The un-timestamped current plan/tracker
+# remain searchable.
+refine-logs/EXPERIMENT_PLAN_20260817_*.md
+refine-logs/EXPERIMENT_TRACKER_20260817_*.md
+refine-logs/P1_OFFLINE_DIAGNOSTIC_TRACE*.md
+
+# Historical planner prompts and the old A-disk compute ledger. These remain
+# tracked for audit but are not current status/configuration sources.
+.aris/traces/
+.aris/compute/
+
+# Git reflogs and FETCH_HEAD contain old branch names and commits; they are
+# repository metadata rather than current project documentation.
+.git/

@@ -1,6 +1,10 @@
 # Research Output Manifest
 
 > Auto-maintained by ARIS skills. Tracks all generated artifacts across the research lifecycle.
+> This is a historical audit ledger, not the current project-status source. For current state use
+> `docs/PROJECT_STATUS.md`; for current commands use `docs/RUNBOOK.md`; for current Lite3 work use
+> `docs/LITE3_REAL_HANDOFF.md`; for current ARIS execution use the un-timestamped plan/tracker in
+> `refine-logs/`. Historical entries and old environment paths below must not override those files.
 
 | Timestamp | Skill | File | Stage | Description |
 |-----------|-------|------|-------|-------------|
@@ -41,8 +45,7 @@
 | 2026-08-17 13:54 | /experiment-bridge | refine-logs/EXPERIMENT_PLAN.md | implementation | latest copy：禁止继续 live CARLA，启用有限离线 OFAT/motion/voxel 分支 |
 | 2026-08-17 13:54 | /experiment-bridge | refine-logs/EXPERIMENT_TRACKER_20260817_135410.md | implementation | Rescue tracker：唯一 P1-OD run IDs、参数、依赖、S/Q 门和 60 分钟上限 |
 | 2026-08-17 13:54 | /experiment-bridge | refine-logs/EXPERIMENT_TRACKER.md | implementation | latest copy：同步 P1-OFFLINE-DIAGNOSTIC 执行清单 |
-| 2026-08-17 13:54 | /experiment-bridge | refine-logs/P1_OFFLINE_DIAGNOSTIC_TRACE_20260817_135410.md | implementation | Rescue planning evidence、选择理由、claim 边界与产物协议 |
-| 2026-08-17 13:54 | /experiment-bridge | refine-logs/P1_OFFLINE_DIAGNOSTIC_TRACE.md | implementation | latest rescue planning trace |
+| 2026-08-17 13:54 | /experiment-bridge | refine-logs/P1_OFFLINE_DIAGNOSTIC_TRACE_20260817_135410.md | implementation | Rescue planning evidence、选择理由、claim 边界与产物协议；无时间戳 alias 与本文件逐字节相同，已在 2026-08-21 文档整理中移出当前树，可由 `d27c103` 恢复 |
 | 2026-08-17 14:39 | /experiment-bridge | `/home/yk/ws/carla_benchmark_data/autotest_20260817_132126/summary/p1_offline_diagnostic/motion_v1_v2_by_offset.{json,csv,md}` | execution | superseding paired common `(lidar_frame,point_index)` correction；supported counts stationary 24459、constant_velocity 23472、turning 13820；JSON SHA-256 `f4dd66c9a6fd3ee73cbea9dac7d1c539baf9edf3663fce4cb1e4186708726a8c`；prior outputs retained as `.pre_pairing_correction` |
 | 2026-08-17 14:39 | /experiment-bridge | `/home/yk/ws/carla_benchmark_data/autotest_20260817_132126/summary/p1_offline_diagnostic/{run_metrics.csv,ofat_point_comparison.json,voxel_comparison.json,P1_OFFLINE_DIAGNOSTIC_REPORT.md}` | execution | corrected P1 offline final summary；19 input rows、summary record excluded；canonical ledger 62 = 34 PASS + 5 BLOCKED + 23 NOT_RUN；39 attempted；representative full AUROC all lower than none，semantic-only gap/AUROC small positive；report SHA-256 `b271a1c21ff240f699961ef7d362300aa0e4ebfa209df30503e60c538b8c4102` |
 | 2026-08-17 14:39 | /experiment-bridge | `/home/yk/ws/carla_benchmark_data/autotest_20260817_132126/summary/p1_offline_diagnostic/*pre_pairing_correction` | execution | immutable pre-correction artifacts retained for audit；correction records reference old/new SHA-256 |
