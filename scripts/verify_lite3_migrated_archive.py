@@ -5,6 +5,7 @@ import argparse
 import hashlib
 import json
 import re
+import subprocess
 import sys
 from pathlib import Path
 
@@ -92,6 +93,62 @@ def _check_hashes(entries, base_directory, label, omit=frozenset()):
                     label, path, expected_digest, actual_digest))
 
 
+def _is_git_repository(project_root):
+    completed = subprocess.run(
+        ["git", "-C", str(project_root), "rev-parse", "--is-inside-work-tree"],
+        capture_output=True,
+        check=False,
+        text=True,
+    )
+    return completed.returncode == 0 and completed.stdout.strip() == "true"
+
+
+def _git_blob_sha256(project_root, revision, relative_path):
+    completed = subprocess.run(
+        [
+            "git",
+            "-C",
+            str(project_root),
+            "show",
+            "{}:{}".format(revision, relative_path),
+        ],
+        capture_output=True,
+        check=False,
+    )
+    if completed.returncode != 0:
+        detail = completed.stderr.decode("utf-8", errors="replace").strip()
+        raise MigrationValidationError(
+            "cannot read implementation blob {}:{}: {}".format(
+                revision, relative_path, detail))
+    return hashlib.sha256(completed.stdout).hexdigest()
+
+
+def _check_implementation_hashes(
+        entries, project_root, recorded_revision):
+    use_recorded_git_tree = _is_git_repository(project_root)
+    for entry, expected_digest in sorted(entries.items()):
+        candidate = Path(entry)
+        if candidate.is_absolute():
+            if not candidate.is_file():
+                raise MigrationValidationError(
+                    "implementation file is missing: {}".format(candidate))
+            actual_digest = _sha256(candidate)
+        elif use_recorded_git_tree:
+            actual_digest = _git_blob_sha256(
+                project_root, recorded_revision, entry)
+        else:
+            path = project_root / entry
+            if not path.is_file():
+                raise MigrationValidationError(
+                    "implementation file is missing: {}".format(path))
+            actual_digest = _sha256(path)
+        if actual_digest != expected_digest:
+            raise MigrationValidationError(
+                "implementation hash differs for {}: expected={}, "
+                "actual={}".format(
+                    entry, expected_digest, actual_digest))
+
+
 def _check_manifest(run_directory):
     manifest_path = run_directory / "manifest.json"
     try:
@@ -122,6 +179,7 @@ def _check_manifest(run_directory):
         raise MigrationValidationError(
             "OVERALL expected {!r}, got {!r}".format(
                 PASS_STATUS, overall))
+    return manifest
 
 
 def _check_artifact_set(run_directory, entries):
@@ -165,7 +223,7 @@ def validate_migration(source_directory, run_directory, project_root):
             raise MigrationValidationError(
                 "{} does not exist: {}".format(label, path))
 
-    _check_manifest(run_directory)
+    manifest = _check_manifest(run_directory)
 
     source_entries = _read_ledger(run_directory / "source_sha256.txt")
     _check_hashes(source_entries, source_directory, "source")
@@ -184,8 +242,11 @@ def validate_migration(source_directory, run_directory, project_root):
         run_directory / "implementation_sha256.txt",
         allow_absolute=True,
     )
-    _check_hashes(
-        implementation_entries, project_root, "implementation")
+    _check_implementation_hashes(
+        implementation_entries,
+        project_root,
+        manifest["git_sha"],
+    )
 
     return {
         "source_hashes": "PASS",

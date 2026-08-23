@@ -1094,6 +1094,8 @@ python3 scripts/verify_lite3_migrated_archive.py \
 `EXPECTED_OMISSIONS=PASS`、`IMPLEMENTATION_HASHES=PASS` 和
 `OVERALL=B_DISK_COMPACT_ARCHIVE_PASS`。脚本要求缺失集合恰好是账本中的四个
 `merged/`/`output_bag/` 大文件，严格校验其余全部条目，并拒绝精简目录中的额外文件。
+仓库内实现文件按 manifest 记录的 Git commit 读取，不会因当前分支后续正常修改而把
+历史证据误报损坏；依赖仓库的绝对路径条目仍与 B 盘保留文件直接核对。
 manifest 和 `source_path.txt` 中的 `/home/yk/lite3_*` 是原始运行来源记录，不应改写。
 
 只有在代码、依赖或工作区发生变化而需要验证重建环境时，才重新运行完整烟测。使用本地

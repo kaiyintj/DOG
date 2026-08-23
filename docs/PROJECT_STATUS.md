@@ -82,13 +82,14 @@ B 盘精简归档保留报告、日志、配置和哈希，但不含 `merged/`�
 - SegFormer 训练现在支持独立 `calibration/test`：`val` 只选模，最终阈值优先使用
   `test`，报告绑定 checkpoint SHA-256；缺少独立 test 时明确标为非正式结果；
 - 算法基线当时的等价完整回归为 `184 passed, 1 skipped`；2026-08-23 B 盘
-  重建后的当前完整测试为 `250 passed, 1 skipped`。flake8/pep257、三包
+  重建后的当前完整测试为 `253 passed, 1 skipped`。flake8/pep257、三包
   `colcon build`、两个 Nav2 入口解析和实际图片离线推理均有通过记录；
 - 算法与实验基线为 `d27c103`；A 盘交接文档来源为 `f9b75de`。包含本文的 B 盘适配
   版本未改变核心融合算法、正式 YAML 或既有实验结论；它新增 B 盘只读校验/预检
   工具及其定向测试，补充 Torch/colcon 共同支持的 setuptools 约束，并把旧
-  `clip_query` 的重复模型加载收敛为 `/text_query` 便捷发布器。当前分支、HEAD、
-  远端差异和工作区状态只以本文第 9 节列出的 Git 命令为准；
+  `clip_query` 的重复模型加载收敛为 `/text_query` 便捷发布器；GA 主循环仅在 rclpy
+  context 已关闭时把 `RCLError` 视为正常退出。当前分支、HEAD、远端差异和工作区
+  状态只以本文第 9 节列出的 Git 命令为准；
 - Lite3 当前下一阶段是外参、TF、SDK 安全桥和受控运动 Bag，不是重复静止烟测。Gazebo
   仍有一项独立仿真回归待办：在全新进程和空 GA-BSVM 体素图中，用
   `school_parking_lot.world` 复测 `white truck`/`yellow truck`，并确认
@@ -327,7 +328,7 @@ LiDAR-相机外参仍是占位值，因此 `projection_calibration_verified` 必
   体素融合和导航配置回归已纳入测试；当时分组运行的等价完整结果为
   `184 passed, 1 skipped`，flake8/pep257 均通过，当时的警告来自 SciPy/NumPy
   版本范围不一致；
-- 2026-08-23 B 盘重建后的当前完整测试为 `250 passed, 1 skipped`，flake8/pep257
+- 2026-08-23 B 盘重建后的当前完整测试为 `253 passed, 1 skipped`，flake8/pep257
   通过；Livox 消息包、FAST-LIO 和 `semantic_mapping` 均已在 B 盘成功构建；
 - `ros2 pkg executables semantic_mapping` 当前安装 14 个入口，包含
   `nav_goal_bridge_node`、`segformer_dataset`、`segformer_finetune`、
@@ -381,7 +382,7 @@ LiDAR-相机外参仍是占位值，因此 `projection_calibration_verified` 必
 OpenCLIP 3.3.0 和 setuptools 79.0.1；`cv_bridge`、OpenCLIP 与 Livox `CustomMsg`
 均可导入。`livox_ros_driver2` 以 message-only 模式构建，FAST-LIO 使用 B 盘
 本地官方 `pcl_ros` 包配置，然后与 `semantic_mapping` 一起成功构建。实时预检得到
-`OVERALL=B_DISK_RUNTIME_READY`，完整测试为 `250 passed, 1 skipped`。
+`OVERALL=B_DISK_RUNTIME_READY`，完整测试为 `253 passed, 1 skipped`。
 
 当前全局 `pip check` 仍报告用户安装的 OpenCV 5 声明 NumPy `>=2`，以及与本项目
 无关的 PyNaCl/cffi 问题；`cv2` 实际导入通过，本项目源码也不直接导入它。
@@ -444,7 +445,8 @@ Lite3 速度链、Nav2 里程计配置、离线烟测工具和 CARLA 诊断记�
 `f9b75ded0d5d8cbe207d22c5491b04800b1f8801`；B 盘在其内容基础上适配了实际数据路径、
 精简烟测归档、严格迁移验证和运行时预检，未改变核心融合算法或正式 YAML；新增
 B 盘只读工具及其定向测试，补充开发环境约束，并修正 `clip_query` 的重复模型加载和
-回调内关闭 ROS 所导致的特征不一致与退出死锁。
+回调内关闭 ROS 所导致的特征不一致与退出死锁；GA 节点也只在 rclpy context 已关闭时
+接受关闭阶段的 `RCLError`，context 仍有效时继续抛出真实错误。
 
 Git 是分支、HEAD、远端差异和工作区状态的唯一实时来源。新任务开始时在项目根目录
 执行：

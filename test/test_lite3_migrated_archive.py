@@ -4,6 +4,7 @@ import hashlib
 import importlib.util
 import json
 from pathlib import Path
+import subprocess
 
 import pytest
 
@@ -120,3 +121,41 @@ def test_changed_retained_artifact_fails(tmp_path):
     with pytest.raises(
             MODULE.MigrationValidationError, match="hash differs"):
         MODULE.validate_migration(source, run, project)
+
+
+def test_implementation_hash_uses_manifest_git_tree(tmp_path):
+    """Keep historical evidence valid after the current source changes."""
+    project = tmp_path / "project"
+    project.mkdir()
+    implementation = project / "core.py"
+    implementation.write_text("VALUE = 1\n", encoding="utf-8")
+    subprocess.run(["git", "init", "-q", str(project)], check=True)
+    subprocess.run(
+        ["git", "-C", str(project), "add", "core.py"], check=True)
+    subprocess.run(
+        [
+            "git",
+            "-C",
+            str(project),
+            "-c",
+            "user.name=Migration Test",
+            "-c",
+            "user.email=migration-test@example.invalid",
+            "commit",
+            "-q",
+            "-m",
+            "record implementation",
+        ],
+        check=True,
+    )
+    revision = subprocess.run(
+        ["git", "-C", str(project), "rev-parse", "HEAD"],
+        capture_output=True,
+        check=True,
+        text=True,
+    ).stdout.strip()
+    expected = _digest(implementation)
+    implementation.write_text("VALUE = 2\n", encoding="utf-8")
+
+    MODULE._check_implementation_hashes(
+        {"core.py": expected}, project, revision)
