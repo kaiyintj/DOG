@@ -1076,8 +1076,8 @@ Git/ROS 环境、每个进程的独立日志和 JSON/TXT 验收报告。状态�
 
 ### 8.9 离线复现与迁移备份清单
 
-2026-08-18 推荐 Bag 已迁入 B 盘，2026-08-21 完整烟测已经在干净 `d27c103` 上通过。
-B 盘只保留约 1.2 MiB 的精简证据目录：manifest、源路径、日志、配置、运行图、状态、
+2026-08-18 推荐 Bag 已迁入 B 盘。2026-08-21 烟测在干净 `d27c103` 上通过，B 盘保留
+约 1.2 MiB 的历史精简证据目录：manifest、源路径、日志、配置、运行图、状态、
 验收报告和哈希账本均保留，体积较大的 `merged/` 与 `output_bag/` 未迁入。因此它可验证
 历史运行结论和实现来源，但不能直接重放或重新计算输出。使用唯一的只读迁移验证入口：
 
@@ -1097,6 +1097,18 @@ python3 scripts/verify_lite3_migrated_archive.py \
 仓库内实现文件按 manifest 记录的 Git commit 读取，不会因当前分支后续正常修改而把
 历史证据误报损坏；依赖仓库的绝对路径条目仍与 B 盘保留文件直接核对。
 manifest 和 `source_path.txt` 中的 `/home/yk/lite3_*` 是原始运行来源记录，不应改写。
+
+2026-08-23 B 盘重建环境的完整烟测在干净 `b86008d` 上通过，当前推荐完整证据为：
+
+```text
+/home/yk/ws/lite3_offline_runs/lite3_clip_smoke_20260823T030733Z_wR2TtN
+```
+
+该目录保留 `merged/`、`output_bag/` 和全部报告，manifest 记录
+`ALGORITHM_STATIC_PASS_NON_GEOMETRIC`、`git_dirty=false`、`motion_ready=false`。
+第一次复验目录 `lite3_clip_smoke_20260823T023350Z_XAl5uN` 因 GA 退出阶段的
+`RCLError` 被日志门禁判为失败；修复后真实负载复验通过。失败目录只保留诊断日志和报告，
+四个可重生成的 Bag payload/metadata 已删除。
 
 只有在代码、依赖或工作区发生变化而需要验证重建环境时，才重新运行完整烟测。使用本地
 输入时脚本只引用原始目录，不会创建 `$RUN_DIR/raw`；继续使用同一个不可变原始路径：
@@ -1118,10 +1130,10 @@ cat "$RUN_DIR/OVERALL"
 
 必须留在电脑并再备份一份的内容：
 
-1. 必须保留 B 盘不可变原始 Bag 与当前精简烟测证据目录。两者共同保留输入数据、运行
-   结论、配置、日志、实现绑定和哈希，但精简目录不能替代可重放的完整运行；若未来因
-   代码或环境变化重新执行烟测，应另行保留该次新生成的完整 `merged/`、`output_bag/`
-   和报告。当前推荐原始 Bag 位于 `/home/yk/ws/lite3_bags`；
+1. 必须保留 B 盘不可变原始 Bag、2026-08-21 历史精简归档和 2026-08-23 当前完整烟测。
+   三者共同保留输入数据、历史迁移结论和当前 B 盘可执行证据；当前完整烟测的
+   `merged/`、`output_bag/` 和报告不得按精简归档规则删除。推荐原始 Bag 位于
+   `/home/yk/ws/lite3_bags`；
 2. `~/ws/src/semantic_mapping`、`~/ws/src/fast_lio` 和
    `~/ws/src/livox_ros_driver2` 的完整源码；工作区未提交文件不能只靠 Git HEAD；
 3. B 盘没有迁入旧 `~/ws/install`；首次成功重建后保留新的

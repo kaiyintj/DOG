@@ -42,11 +42,16 @@
 - Algorithm/evidence baseline: `d27c1032f97d8e744c3ee2f2ef196c00ea6bac7e`.
 - Immutable source Bag:
   `/home/yk/ws/lite3_bags/lite3_concurrent_20260818_203250_HsW1R7`.
-- Compact smoke evidence:
+- Historical compact smoke evidence (clean `d27c103`):
   `/home/yk/ws/lite3_offline_runs/lite3_clip_smoke_20260821T020049Z_xLnEzN`.
+- Current full B-disk rebuild evidence (clean `b86008d`):
+  `/home/yk/ws/lite3_offline_runs/lite3_clip_smoke_20260823T030733Z_wR2TtN`.
 - The compact archive intentionally omits only the four `merged/` and `output_bag/`
   payload files recorded by the migration validator. Historical manifest/source paths
   are provenance and must not be rewritten.
+- The current rebuild evidence retains its full `merged/` and `output_bag/` payloads and
+  records `ALGORITHM_STATIC_PASS_NON_GEOMETRIC`; it still records
+  `motion_ready=false` and unverified extrinsics.
 - Validate this evidence through the migration command in RUNBOOK section 8.9 before
   claiming that the archive is complete.
 - Before claiming that B-disk ROS execution works, require

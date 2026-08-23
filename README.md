@@ -191,17 +191,18 @@ GA-BSVM under an isolated ROS domain. It never starts Nav2, active perception
 or a robot command bridge. A successful result is deliberately named
 `ALGORITHM_STATIC_PASS_NON_GEOMETRIC`: it verifies the offline software chain,
 not camera-LiDAR calibration, map accuracy or readiness to move the robot.
-The canonical 2026-08-21 run is
+The historical migration record is
 `/home/yk/ws/lite3_offline_runs/lite3_clip_smoke_20260821T020049Z_xLnEzN`.
-It passed on clean semantic-mapping commit `d27c103`, while calibration remained
-unverified and `motion_ready` remained false. The B-disk copy is a compact
-evidence archive: reports, logs, generated configuration, manifests and hashes
-are retained, while the reproducible `merged/` and `output_bag/` payloads are
-intentionally omitted. The immutable source bags remain available separately.
-Validate that compact archive with
+It passed on clean semantic-mapping commit `d27c103`; its B-disk copy is a compact
+evidence archive whose reproducible `merged/` and `output_bag/` payloads are
+intentionally omitted. The current B-disk rebuild record is
+`/home/yk/ws/lite3_offline_runs/lite3_clip_smoke_20260823T030733Z_wR2TtN`.
+It passed on clean commit `b86008d` and retains the full replay payloads. Both
+records keep calibration unverified and `motion_ready=false`; the immutable source
+Bag remains available separately. Validate the historical compact archive with
 `scripts/verify_lite3_migrated_archive.py`, then follow the
 [offline reproduction and migration checklist](docs/RUNBOOK.md#89-离线复现与迁移备份清单)
-so the raw capture, canonical smoke result, model cache, robot-side
+so the raw capture, current smoke result, model cache, robot-side
 configuration and hardware evidence remain available.
 
 ## SegFormer fusion backend

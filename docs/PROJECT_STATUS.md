@@ -14,20 +14,24 @@
 [LITE3_REAL_HANDOFF.md](LITE3_REAL_HANDOFF.md)。其中冻结了当前最佳 Bag、电脑归档路径、
 最新离线烟测结果、下一阶段任务和实机运动前门禁，优先级高于旧聊天中的临时命令。
 
-2026-08-21 的当前实机证据基线是：
+2026-08-23 的当前 B 盘实机证据基线是：
 
 - 推荐静止 Bag：
   `/home/yk/ws/lite3_bags/lite3_concurrent_20260818_203250_HsW1R7`；
-- 推荐离线烟测：
-  `/home/yk/ws/lite3_offline_runs/lite3_clip_smoke_20260821T020049Z_xLnEzN`（精简证据归档）；
+- 当前完整离线烟测：
+  `/home/yk/ws/lite3_offline_runs/lite3_clip_smoke_20260823T030733Z_wR2TtN`
+  （干净 `b86008d`，保留 `merged/` 与 `output_bag/`）；
+- 历史迁移精简归档：
+  `/home/yk/ws/lite3_offline_runs/lite3_clip_smoke_20260821T020049Z_xLnEzN`
+  （干净 `d27c103`）；
 - `SENSOR_HEADER_ALIGNMENT=PASS`；
 - `ALGORITHM_STATIC_PASS_NON_GEOMETRIC`；
 - `CALIBRATION_STRUCTURE=NOT_READY`；
 - `MOTION_READY=NO`。
 
-该离线烟测使用 CPU CLIP，只验证静止数据上的 FAST-LIO、CLIP、GA-BSVM 和语义
+当前完整烟测使用 CPU CLIP，只验证静止数据上的 FAST-LIO、CLIP、GA-BSVM 和语义
 costmap 软件链；它不是 SegFormer 性能实验，不验证 LiDAR--相机投影几何，也不授权运动。
-B 盘精简归档保留报告、日志、配置和哈希，但不含 `merged/`、`output_bag/`，不能直接重放。
+历史精简归档保留报告、日志、配置和哈希，但不含 `merged/`、`output_bag/`，不能直接重放。
 
 - 代码已按用途分层：`semantic_mapping/runtime/` 放实际运行代码及其依赖的共用核心，
   `semantic_mapping/carla/` 只放 CARLA 仿真采集/评测代码；运行时目录不依赖 carla 目录，
@@ -140,7 +144,7 @@ CLIP 与 SegFormer 是两套可替换的语义前端，不应在同一次实验�
 | Gazebo 语言查询自动触发 Nav2 | action 桥接已实现，等待本轮 Gazebo 闭环复测 |
 | Gazebo 主动感知速度调节 | 代码已接入，需定量实验验证收益 |
 | Lite3 实机传感器采集 | 2026-08-18 最佳 Bag 通过频率、计数、共同窗口和 header 审计；接收调度有 WARN |
-| Lite3 电脑离线结构烟测 | 2026-08-21 在干净 `d27c103` 上得到 `ALGORITHM_STATIC_PASS_NON_GEOMETRIC` |
+| Lite3 电脑离线结构烟测 | 2026-08-23 在干净 `b86008d` 上完成 B 盘重建复验，得到 `ALGORITHM_STATIC_PASS_NON_GEOMETRIC` |
 | Lite3 实机语义导航 | 配置已失败关闭；标定、定位 TF、运动安全桥和 Nav2 闭环未完成 |
 
 ## 3. 当前系统组成
@@ -367,10 +371,14 @@ LiDAR-相机外参仍是占位值，因此 `projection_calibration_verified` 必
 - `/tf_static` 仍没有 `rslidar -> camera_color_optical_frame` 链路，故严格状态保持
   `SENSOR_HEADER_ALIGNMENT=PASS`、`CALIBRATION_STRUCTURE=NOT_READY`、
   `MOTION_READY=NO`；
-- 2026-08-21 的推荐离线烟测在干净 `d27c103` 上通过：FAST-LIO odometry 约 10 Hz，
-  有效持续约 56.9 秒，最终平移约 0.0278 m、最大半径约 0.0296 m；输出 13 对精确
-  时间戳配对的 semantic/uncertainty clouds、67 条 semantic costmap，且运行图中
-  `/cmd_vel` 发布者为 0；
+- 2026-08-23 的 B 盘完整复验在干净 `b86008d` 上通过：FAST-LIO odometry 约 10 Hz，
+  有效持续约 57.2 秒，最终平移约 0.0270 m、最大半径约 0.0277 m；输出 13 对精确
+  时间戳配对的 semantic/uncertainty clouds、66 条 semantic costmap，且 676 次运行图
+  采样中 `/cmd_vel` 发布者始终为 0；完整证据位于
+  `/home/yk/ws/lite3_offline_runs/lite3_clip_smoke_20260823T030733Z_wR2TtN`；
+- 本次第一次完整复验绑定干净 `05569b3`，算法输出已生成，但退出阶段的 GA ROS context
+  关闭竞态产生 `RCLError`，被致命日志门禁正确判为失败。`b86008d` 只在 context 已关闭
+  时接受该退出，并用定向回归测试确认 context 仍有效时错误继续抛出；随后真实负载复验通过；
 - 该结果严格记为 `ALGORITHM_STATIC_PASS_NON_GEOMETRIC`。它保留外参未验证、
   `motion_ready=false` 和无运动执行端的安全边界，不能评价语义地图几何精度或授权机器狗
   行走。
@@ -420,8 +428,8 @@ OpenCLIP 3.3.0 和 setuptools 79.0.1；`cv_bridge`、OpenCLIP 与 Livox `CustomM
 
 ## 8. 推荐的下一阶段顺序
 
-1. 保留 2026-08-18 推荐 Bag 和 2026-08-21 推荐离线烟测为当前静止基线，不重复采集
-   同配置静止数据，除非安装、驱动或传感器模式发生变化；
+1. 保留 2026-08-18 推荐 Bag、2026-08-23 当前完整烟测和 2026-08-21 历史精简归档，
+   不重复采集同配置静止数据，除非安装、驱动或传感器模式发生变化；
 2. 保存真实 TF 树，完成并验收 `rslidar -> camera_color_optical_frame` 外参；在进入
    实机 reliability 融合前只把 Motion V2 保留为诊断量。验收
    Camera/LiDAR 时间戳、CameraInfo、静态 TF 和 LiDAR-相机外参后，才把
@@ -439,14 +447,16 @@ OpenCLIP 3.3.0 和 setuptools 79.0.1；`cv_bridge`、OpenCLIP 与 Livox `CustomM
 
 ## 9. Git 状态说明
 
-B 盘算法与实验基线为
+B 盘核心算法与实验基线为
 `d27c1032f97d8e744c3ee2f2ef196c00ea6bac7e`。该提交已包含 CameraInfo/投影失败关闭、
 Lite3 速度链、Nav2 里程计配置、离线烟测工具和 CARLA 诊断记录。A 盘交接文档来源为
 `f9b75ded0d5d8cbe207d22c5491b04800b1f8801`；B 盘在其内容基础上适配了实际数据路径、
 精简烟测归档、严格迁移验证和运行时预检，未改变核心融合算法或正式 YAML；新增
 B 盘只读工具及其定向测试，补充开发环境约束，并修正 `clip_query` 的重复模型加载和
 回调内关闭 ROS 所导致的特征不一致与退出死锁；GA 节点也只在 rclpy context 已关闭时
-接受关闭阶段的 `RCLError`，context 仍有效时继续抛出真实错误。
+接受关闭阶段的 `RCLError`，context 仍有效时继续抛出真实错误。当前完整 B 盘烟测的
+manifest 绑定干净验证提交 `b86008dc703bc7be5e4fcd11ce4f56b413290d41`；历史精简归档
+仍绑定 `d27c103`，两者不互相覆盖。
 
 Git 是分支、HEAD、远端差异和工作区状态的唯一实时来源。新任务开始时在项目根目录
 执行：

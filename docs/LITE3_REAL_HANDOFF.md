@@ -22,8 +22,8 @@
   时间差约 32.6 ms；
 - CameraInfo 内参稳定，但 `/tf_static` 中仍没有 `rslidar -> camera_color_optical_frame`
   链路；
-- 2026-08-21 已在开发电脑上用该 Bag 完成 FAST-LIO + CPU CLIP + GA-BSVM 离线烟测，
-  并得到 `ALGORITHM_STATIC_PASS_NON_GEOMETRIC`；
+- 2026-08-23 已在 B 盘重建环境中用该 Bag 完成 FAST-LIO + CPU CLIP + GA-BSVM
+  离线复验，并在干净 `b86008d` 上得到 `ALGORITHM_STATIC_PASS_NON_GEOMETRIC`；
 - 烟测运行图中 `/cmd_vel` 发布者为 0，没有启动 Nav2、主动感知或运动桥。
 
 当前严格状态为：
@@ -64,14 +64,17 @@ MOTION_READY=NO
 目录用途不要混淆：
 
 - `/home/yk/ws/lite3_bags`：B 盘机器狗原始 Bag 归档，相当于实验“底片”，必须保留；
-- `/home/yk/ws/lite3_offline_runs`：B 盘迁移后的精简烟测证据归档；
-- 未来重新执行脚本时，新的完整运行仍默认写到 `/home/yk/lite3_offline_runs`，不得与
-  B 盘精简归档混淆；
+- `/home/yk/ws/lite3_offline_runs`：B 盘的历史精简归档和当前完整烟测证据；
+- 未来重新执行脚本时，新运行仍默认写到 `/home/yk/lite3_offline_runs`；只有验收通过并
+  选为长期证据的运行才另行保留到 `/home/yk/ws/lite3_offline_runs`；
 - 当前推荐离线证据是
-  `/home/yk/ws/lite3_offline_runs/lite3_clip_smoke_20260821T020049Z_xLnEzN`。它约 1.2 MiB，
-  保留 manifest、配置、日志、验收报告和哈希账本，故意不保留 `merged/` 与
-  `output_bag/`，不能直接重放；manifest 绑定 `d27c103`、`git_dirty=false` 和
-  `ALGORITHM_STATIC_PASS_NON_GEOMETRIC`。
+  `/home/yk/ws/lite3_offline_runs/lite3_clip_smoke_20260823T030733Z_wR2TtN`。它约 600 MiB，
+  保留完整 `merged/`、`output_bag/`、报告和日志；manifest 绑定 `b86008d`、
+  `git_dirty=false` 和 `ALGORITHM_STATIC_PASS_NON_GEOMETRIC`；
+- 历史迁移证据
+  `/home/yk/ws/lite3_offline_runs/lite3_clip_smoke_20260821T020049Z_xLnEzN` 仍约 1.2 MiB，
+  绑定 `d27c103`。它故意不保留 `merged/` 与 `output_bag/`，只能验证迁移来源和历史
+  结论，不能直接重放。
 
 manifest 与 `source_path.txt` 中的 `/home/yk/lite3_*` 是 2026-08-21 运行时的 A 盘来源
 记录，不是 B 盘当前路径，不得为了迁移而改写。B 盘完整性使用 RUNBOOK 第 8.9 节的
@@ -102,10 +105,11 @@ manifest 与 `source_path.txt` 中的 `/home/yk/lite3_*` 是 2026-08-21 运行�
 - 实机语义配置：`config/semantic_mapping_lite3_real.yaml`；
 - 完整传感器和离线命令：[RUNBOOK 第 8 节](RUNBOOK.md#8-lite3-实机传感器采集与上机前清单)。
 
-算法与实验基线为 `d27c103`，A 盘交接文档来源为 `f9b75de`。包含本文的 B 盘适配版本
+核心算法与实验基线为 `d27c103`，A 盘交接文档来源为 `f9b75de`。包含本文的 B 盘适配版本
 同步证据、交接入口、路径和搜索规则，新增只读校验/预检工具与开发环境约束；同时把
 `clip_query` 收敛为 `/text_query` 便捷发布器，文本特征统一由 `clip_node` 编码。
-这些调整不改变核心融合算法、正式 YAML 或既有实验证据。
+这些调整不改变核心融合算法、正式 YAML 或既有实验证据。B 盘完整复验绑定 `b86008d`；
+其中 GA 退出修复只接受 context 已关闭后的 `RCLError`，真实 ROS 错误仍会抛出。
 实时 Git 状态统一按 [PROJECT_STATUS 第 9 节](PROJECT_STATUS.md#9-git-状态说明) 查询。
 
 ## 4. 新窗口首先执行的任务
@@ -177,7 +181,7 @@ manifest 与 `source_path.txt` 中的 `/home/yk/lite3_*` 是 2026-08-21 运行�
 当前从 LITE3_REAL_HANDOFF.md 第 4 节继续。先在电脑端用
 /home/yk/ws/lite3_bags/lite3_concurrent_20260818_203250_HsW1R7
 和
-/home/yk/ws/lite3_offline_runs/lite3_clip_smoke_20260821T020049Z_xLnEzN
+/home/yk/ws/lite3_offline_runs/lite3_clip_smoke_20260823T030733Z_wR2TtN
 作为当前静止基线。烟测已经得到 ALGORITHM_STATIC_PASS_NON_GEOMETRIC，不要重复运行，
 也不要把它当成 MOTION_READY。下一步只读检查真实 TF 树、LiDAR--相机外参结构和云深处
 SDK 接口；不要发布运动命令，不要启动 Nav2 实机闭环，不要修改
