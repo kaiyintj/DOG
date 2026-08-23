@@ -221,6 +221,32 @@ def _import_check(module_name):
     )
 
 
+def _cv_bridge_rgb_roundtrip_check():
+    completed = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            (
+                "import numpy as np; "
+                "from cv_bridge import CvBridge; "
+                "bridge = CvBridge(); "
+                "image = np.zeros((2, 2, 3), dtype=np.uint8); "
+                "message = bridge.cv2_to_imgmsg(image, encoding='rgb8'); "
+                "bridge.imgmsg_to_cv2(message, desired_encoding='rgb8')"
+            ),
+        ],
+        capture_output=True,
+        check=False,
+        text=True,
+    )
+    passed = completed.returncode == 0
+    return Check(
+        "CV_BRIDGE_RGB_ROUNDTRIP",
+        passed,
+        "rgb8 conversion works" if passed else _failure_summary(completed),
+    )
+
+
 def _ros_package_checks():
     ros2 = shutil.which("ros2")
     if ros2 is None:
@@ -281,6 +307,7 @@ def check_runtime(project_root, backend):
         _import_check(module_name)
         for module_name in BASE_IMPORTS + BACKEND_IMPORTS[backend]
     )
+    checks.append(_cv_bridge_rgb_roundtrip_check())
     checks.extend(_ros_package_checks())
     return checks
 

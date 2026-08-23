@@ -58,8 +58,9 @@ costmap 软件链；它不是 SegFormer 性能实验，不验证 LiDAR--相机�
 - `nav_goal_bridge_node` 已升级为“一个活动目标 + 一个最新待发送目标”的事务状态机；
   新目标会显式取消旧目标，发送异常/拒绝会保留并重试，结果去重，状态发布到
   `/nav_goal_bridge/status`；
-- Nav2 已拆成两个明确入口：Gazebo 使用 `nav_sim.launch.py`（仿真时钟、`/odom`、
-  仿真参数），Lite3 使用 `nav_lite3_real.launch.py`（墙钟、`/Odometry`、实机参数，
+- Nav2 已拆成两个明确入口：Gazebo 使用 `nav_sim.launch.py`（仿真时钟、可显式选择
+  `/odom` 或 `/Odometry`、仿真参数），Lite3 使用 `nav_lite3_real.launch.py`
+  （墙钟、`/Odometry`、实机参数，
   标定/SDK 桥验收前默认不启动 Goal Bridge）。通用入口现在默认墙钟；
 - 黄车回归暴露的“接近点落在车辆另一侧、沿车身擦行、主动降速改变 DWB 轨迹曲率”已完成
   代码修复：障碍类目标要求机器人同侧 road 接近点，优先直线路径净空，仿真不再使用
@@ -86,19 +87,19 @@ costmap 软件链；它不是 SegFormer 性能实验，不验证 LiDAR--相机�
 - SegFormer 训练现在支持独立 `calibration/test`：`val` 只选模，最终阈值优先使用
   `test`，报告绑定 checkpoint SHA-256；缺少独立 test 时明确标为非正式结果；
 - 算法基线当时的等价完整回归为 `184 passed, 1 skipped`；2026-08-23 B 盘
-  重建后的当前完整测试为 `253 passed, 1 skipped`。flake8/pep257、三包
+  重建后的当前完整测试为 `257 passed, 1 skipped`。flake8/pep257、三包
   `colcon build`、两个 Nav2 入口解析和实际图片离线推理均有通过记录；
 - 算法与实验基线为 `d27c103`；A 盘交接文档来源为 `f9b75de`。包含本文的 B 盘适配
   版本未改变核心融合算法、正式 YAML 或既有实验结论；它新增 B 盘只读校验/预检
   工具及其定向测试，补充 Torch/colcon 共同支持的 setuptools 约束，并把旧
-  `clip_query` 的重复模型加载收敛为 `/text_query` 便捷发布器；GA 主循环仅在 rclpy
-  context 已关闭时把 `RCLError` 视为正常退出。当前分支、HEAD、远端差异和工作区
-  状态只以本文第 9 节列出的 Git 命令为准；
+  `clip_query` 的重复模型加载收敛为 `/text_query` 便捷发布器；GA 和主动感知节点只在
+  rclpy context 已关闭时接受实际出现的关闭异常，context 仍有效时继续抛出真实错误。
+  当前分支、HEAD、远端差异和工作区状态只以本文第 9 节列出的 Git 命令为准；
 - Lite3 当前下一阶段是外参、TF、SDK 安全桥和受控运动 Bag，不是重复静止烟测。Gazebo
-  仍有一项独立仿真回归待办：在全新进程和空 GA-BSVM 体素图中，用
-  `school_parking_lot.world` 复测 `white truck`/`yellow truck`，并确认
-  `nav_goal_bridge_node`、Nav2 action、`/cmd_vel`、`/cmd_vel_champ` 的闭环输出。该仿真
-  待办不替代 Lite3 标定与安全验收，步骤见
+  已在全新进程和空 GA-BSVM 体素图中确认 `white truck` 证据不足时不会误选红车，并以
+  `car` 查询完成 Goal Bridge、Nav2 action、速度链和仿真位移闭环；仍需补充白车有效
+  颜色视角完成正向选择，并继续执行 `yellow truck` 同侧接近点回归。该仿真待办不替代
+  Lite3 标定与安全验收，步骤见
   [RUNBOOK 6.1](RUNBOOK.md#61-school-parking-lot-颜色与导航安全回归)。
 
 ## 1. 项目目标
@@ -141,8 +142,8 @@ CLIP 与 SegFormer 是两套可替换的语义前端，不应在同一次实验�
 | M2DGR Bag 文本查询和目标点生成 | SegFormer `car` 已运行验证；Bag 本身不能驱动机器人 |
 | Gazebo 手动 2D Goal 导航 | 已运行验证 |
 | Gazebo 语义查询生成 `/goal_pose` | 已运行验证 |
-| Gazebo 语言查询自动触发 Nav2 | action 桥接已实现，等待本轮 Gazebo 闭环复测 |
-| Gazebo 主动感知速度调节 | 代码已接入，需定量实验验证收益 |
+| Gazebo 语言查询自动触发 Nav2 | 2026-08-23 `car` 查询闭环及单 action 到达已运行验证；带颜色正向回归未完成 |
+| Gazebo 主动感知速度调节 | 实测进入 `CAUTIOUS` 并同比缩放速度；仍需定量实验验证收益 |
 | Lite3 实机传感器采集 | 2026-08-18 最佳 Bag 通过频率、计数、共同窗口和 header 审计；接收调度有 WARN |
 | Lite3 电脑离线结构烟测 | 2026-08-23 在干净 `b86008d` 上完成 B 盘重建复验，得到 `ALGORITHM_STATIC_PASS_NON_GEOMETRIC` |
 | Lite3 实机语义导航 | 配置已失败关闭；标定、定位 TF、运动安全桥和 Nav2 闭环未完成 |
@@ -332,7 +333,7 @@ LiDAR-相机外参仍是占位值，因此 `projection_calibration_verified` 必
   体素融合和导航配置回归已纳入测试；当时分组运行的等价完整结果为
   `184 passed, 1 skipped`，flake8/pep257 均通过，当时的警告来自 SciPy/NumPy
   版本范围不一致；
-- 2026-08-23 B 盘重建后的当前完整测试为 `253 passed, 1 skipped`，flake8/pep257
+- 2026-08-23 B 盘重建后的当前完整测试为 `257 passed, 1 skipped`，flake8/pep257
   通过；Livox 消息包、FAST-LIO 和 `semantic_mapping` 均已在 B 盘成功构建；
 - `ros2 pkg executables semantic_mapping` 当前安装 14 个入口，包含
   `nav_goal_bridge_node`、`segformer_dataset`、`segformer_finetune`、
@@ -342,11 +343,15 @@ LiDAR-相机外参仍是占位值，因此 `projection_calibration_verified` 必
 - M2DGR SegFormer 路线已成功查询 `car`：目标簇为 2 个体素、累计证据 6.0，
   `/query_target_pose` 为约 `(13.20, -2.75)`，`/goal_pose` 为约
   `(14.15, -3.15)`，水平接近距离约 1.03 m；
-- Gazebo 中 Go2、Mid360、D435i、Nav2 手动目标和 car benchmark 有实际运行记录。
+- Gazebo 中 Go2、Mid360、D435i、Nav2 手动目标和 car benchmark 有实际运行记录；
+  2026-08-23 B 盘补齐 Gazebo ROS 控制、CHAMP 与模型依赖后，12 个相关包成功构建，
+  Go2 的单个 `ros2_control` 系统加载 12 个关节，两控制器均为 active；Livox、相机、
+  IMU、FAST-LIO、SegFormer、GA-BSVM 与 Nav2 闭环均实际运行；
 - GA-BSVM 已按点云消息时间查询 `odom <- pointcloud_frame`，历史 TF 暂时未到时进入
   有界重试队列；无时间戳或重试超时的帧会被丢弃，不再使用最新位姿污染地图；
 - `school_parking_lot.world` 中旧版 `white truck` 曾错误选择红车局部白色附件；簇级
-  颜色支持率修复及自动测试已完成，干净 Gazebo 回归尚待执行，不能提前记为实测通过；
+  颜色支持率修复及自动测试已完成。2026-08-23 干净 Gazebo 回归中白色证据不足，系统
+  正确拒绝目标且未误选红车；白车正向选择仍需补充有效视角，不能提前记为成功；
 - CARLA 0.9.16 的采集和评测工具已能生成车辆、行人和两轮车数据；二维
   CLIP/SegFormer 基准与三维可靠性基准入口均可运行。2026-08-13 已完成 stationary、
   constant-velocity、turning 三组 Motion V2 时间偏移评测并归档报告；Motion V2 的
@@ -388,13 +393,15 @@ LiDAR-相机外参仍是占位值，因此 `projection_calibration_verified` 必
 
 2026-08-23 已把 B 盘用户环境切换到 NumPy 1.26.4、SciPy 1.11.4、
 OpenCLIP 3.3.0 和 setuptools 79.0.1；`cv_bridge`、OpenCLIP 与 Livox `CustomMsg`
-均可导入。`livox_ros_driver2` 以 message-only 模式构建，FAST-LIO 使用 B 盘
-本地官方 `pcl_ros` 包配置，然后与 `semantic_mapping` 一起成功构建。实时预检得到
-`OVERALL=B_DISK_RUNTIME_READY`，完整测试为 `253 passed, 1 skipped`。
+均可导入。实测 SegFormer 时进一步发现用户 OpenCV 5 与 ROS Humble `cv_bridge` 的
+RGB8 类型编号不兼容，已卸载用户 OpenCV 5，当前使用系统 OpenCV 4.5.4，RGB8 往返
+转换和真实图像帧处理均通过。`livox_ros_driver2` 以 message-only 模式构建，FAST-LIO
+使用 B 盘本地官方 `pcl_ros` 包配置，然后与 `semantic_mapping` 一起成功构建。CLIP 与
+SegFormer 两套实时预检均得到 `OVERALL=B_DISK_RUNTIME_READY`，完整测试为
+`257 passed, 1 skipped`。
 
-当前全局 `pip check` 仍报告用户安装的 OpenCV 5 声明 NumPy `>=2`，以及与本项目
-无关的 PyNaCl/cffi 问题；`cv2` 实际导入通过，本项目源码也不直接导入它。
-这些告警未被擅自扩大修复。实时环境状态继续只以
+当前全局 `pip check` 只剩与本项目无关的 PyNaCl/cffi 问题；没有为此扩大修改范围。
+实时环境状态继续只以
 `python3 scripts/check_b_disk_runtime.py --backend clip` 的输出为准。
 
 ## 7. 未实现或未充分验证
@@ -454,7 +461,8 @@ Lite3 速度链、Nav2 里程计配置、离线烟测工具和 CARLA 诊断记�
 精简烟测归档、严格迁移验证和运行时预检，未改变核心融合算法或正式 YAML；新增
 B 盘只读工具及其定向测试，补充开发环境约束，并修正 `clip_query` 的重复模型加载和
 回调内关闭 ROS 所导致的特征不一致与退出死锁；GA 节点也只在 rclpy context 已关闭时
-接受关闭阶段的 `RCLError`，context 仍有效时继续抛出真实错误。当前完整 B 盘烟测的
+接受关闭阶段实际出现的 `RCLError`/`RuntimeError`，主动感知节点避免重复关闭已失效的
+context，context 仍有效时继续抛出真实错误。当前完整 B 盘烟测的
 manifest 绑定干净验证提交 `b86008dc703bc7be5e4fcd11ce4f56b413290d41`；历史精简归档
 仍绑定 `d27c103`，两者不互相覆盖。
 

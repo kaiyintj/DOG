@@ -74,6 +74,22 @@ def _fake_environment(tmp_path, numpy_version="1.26.4"):
     for module_name in CLIP_MODULES:
         _write_module(site, module_name)
     _write_module(site, "livox_ros_driver2.msg")
+    (site / "numpy.py").write_text(
+        "uint8 = object()\n"
+        "class Array:\n"
+        "    pass\n"
+        "def zeros(unused_shape, dtype=None):\n"
+        "    return Array()\n",
+        encoding="utf-8",
+    )
+    (site / "cv_bridge.py").write_text(
+        "class CvBridge:\n"
+        "    def cv2_to_imgmsg(self, array, encoding):\n"
+        "        return array, encoding\n"
+        "    def imgmsg_to_cv2(self, message, desired_encoding):\n"
+        "        return message[0]\n",
+        encoding="utf-8",
+    )
 
     ros2 = binaries / "ros2"
     ros2.write_text(
@@ -118,6 +134,7 @@ def test_cli_accepts_one_complete_runtime(tmp_path):
     assert completed.returncode == 0, completed.stdout + completed.stderr
     assert "DIST_NUMPY=PASS" in completed.stdout
     assert "IMPORT_LIVOX_ROS_DRIVER2_MSG=PASS" in completed.stdout
+    assert "CV_BRIDGE_RGB_ROUNDTRIP=PASS" in completed.stdout
     assert "ROS_PACKAGE_SEMANTIC_MAPPING=PASS" in completed.stdout
     assert "ROS_EXECUTABLE_FAST_LIO_FASTLIO_MAPPING=PASS" in completed.stdout
     assert "ROS_EXECUTABLE_SEMANTIC_MAPPING_CLIP_NODE=PASS" in completed.stdout
@@ -175,4 +192,23 @@ def test_cli_explains_version_and_overlay_failures(tmp_path):
     assert "actual=2.2.6 required[==1.26.4]" in completed.stdout
     assert "IMPORT_CV_BRIDGE=FAIL" in completed.stdout
     assert "ROS_PACKAGE_FAST_LIO=FAIL" in completed.stdout
+    assert "OVERALL=B_DISK_RUNTIME_NOT_READY" in completed.stdout
+
+
+def test_cli_rejects_broken_cv_bridge_rgb_conversion(tmp_path):
+    """Catch ABI mismatches that import-only checks cannot expose."""
+    environment, unused_ros2 = _fake_environment(tmp_path)
+    site = Path(environment["PYTHONPATH"])
+    (site / "cv_bridge.py").write_text(
+        "class CvBridge:\n"
+        "    def cv2_to_imgmsg(self, unused_array, encoding):\n"
+        "        raise KeyError(16)\n",
+        encoding="utf-8",
+    )
+
+    completed = _run_check(environment)
+
+    assert completed.returncode == 1
+    assert "IMPORT_CV_BRIDGE=PASS" in completed.stdout
+    assert "CV_BRIDGE_RGB_ROUNDTRIP=FAIL" in completed.stdout
     assert "OVERALL=B_DISK_RUNTIME_NOT_READY" in completed.stdout

@@ -2362,7 +2362,7 @@ def main():
         rclpy.spin(node)
     except (KeyboardInterrupt, ExternalShutdownException):
         pass
-    except RCLError:
+    except (RCLError, RuntimeError):
         if rclpy.ok():
             raise
     finally:

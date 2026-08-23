@@ -4,7 +4,7 @@
 import rclpy
 from rclpy.callback_groups import MutuallyExclusiveCallbackGroup
 from rclpy.clock import Clock, ClockType
-from rclpy.executors import MultiThreadedExecutor
+from rclpy.executors import ExternalShutdownException, MultiThreadedExecutor
 from rclpy.node import Node
 from rclpy.qos import QoSProfile, qos_profile_sensor_data
 from nav_msgs.msg import Path
@@ -906,10 +906,13 @@ def main():
     executor.add_node(node)
     try:
         executor.spin()
+    except (KeyboardInterrupt, ExternalShutdownException):
+        pass
     finally:
         executor.shutdown()
         node.destroy_node()
-        rclpy.shutdown()
+        if rclpy.ok():
+            rclpy.shutdown()
 
 
 if __name__ == '__main__':

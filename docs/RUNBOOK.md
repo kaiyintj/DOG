@@ -21,7 +21,8 @@ python3 scripts/check_b_disk_runtime.py --backend clip
 `--backend segformer`。脚本直接读取对应 requirements，并通过同一个接口检查：
 
 - NumPy/SciPy/Pillow 及所选 backend 的版本约束；
-- `rclpy`、`rosbag2_py`、`cv_bridge`、Livox 消息和模型模块导入；
+- `rclpy`、`rosbag2_py`、`cv_bridge`、Livox 消息和模型模块导入，并实际执行一次
+  `cv_bridge` RGB8 图像往返转换；
 - `livox_ros_driver2`、`fast_lio`、`semantic_mapping` 是否存在于当前 ROS overlay，
   以及 FAST-LIO/CLIP/GA-BSVM 的关键可执行入口是否已安装。
 
@@ -39,6 +40,12 @@ cd /home/yk/ws/src/semantic_mapping
 python3 -m pip install --user -r requirements-clip.txt
 # 如果本次选择 SegFormer，改为 requirements-segformer.txt
 ```
+
+若 `IMPORT_CV_BRIDGE=PASS` 但 `CV_BRIDGE_RGB_ROUNDTRIP=FAIL`，先检查实际加载的
+OpenCV。ROS 2 Humble 的系统 `cv_bridge` 应与系统 OpenCV 4 配套；本机曾因用户目录中的
+OpenCV 5 覆盖系统 OpenCV 4.5.4，使 SegFormer 每帧在 RGB 消息转换时报 `KeyError: 16`。
+本机已卸载该用户 OpenCV 5，并保留系统 OpenCV 4.5.4。修复后重新运行预检，不要仅以
+`import cv_bridge` 成功作为验收。
 
 这两个文件都通过 `requirements-runtime-common.txt` 固定 NumPy 1.26.4 和
 SciPy 1.11.4，并把 setuptools 限定在 Torch 2.13 与 Humble colcon-core 共同支持的
@@ -493,12 +500,14 @@ CLIP 路线不要启动 `segformer_node`。还可提前运行
 source /opt/ros/humble/setup.bash
 source ~/ws/install/setup.bash
 
-ros2 launch semantic_mapping nav_sim.launch.py
+ros2 launch semantic_mapping nav_sim.launch.py odom_topic:=/Odometry
 ```
 
 该 launch 会同时加载 Nav2、`nav2_params.yaml`、`nav_goal_bridge_node` 和
 `active_perception_node`。桥接节点把 `/goal_pose` 转换为
-`/navigate_to_pose` action；仿真入口固定采用 `/clock`、`/odom` 和
+`/navigate_to_pose` action；本章前面的 FAST-LIO 发布大写 `/Odometry`，所以这里显式
+传入 `odom_topic:=/Odometry`。若另一次实验明确选择 CHAMP/robot_localization 的
+`/odom` 作为唯一里程计源，则改为 `odom_topic:=/odom`。仿真入口采用 `/clock` 和
 `semantic_mapping_sim_livox.yaml`，将 Nav2 velocity smoother 的 `/cmd_vel`
 转发为 `/cmd_vel_champ`。不要再从旧聊天复制通用 launch 加参数的命令。
 
@@ -689,8 +698,15 @@ ros2 topic pub --once /text_query std_msgs/msg/String "{data: 'white truck'}"
    `/cmd_vel_champ` 均有数据；
 5. 若白车证据不足，系统应拒绝发布目标，不能退化为选择红车。
 
-簇级颜色修复目前已通过自动测试，但在上述流程完成前仍记为“代码已实现、Gazebo
-未验收”。
+2026-08-23 已在 B 盘全新 Gazebo/GA-BSVM 进程中执行本节：`white truck` 被正确解析，
+69 个 truck 类体素的白色支持均不足，系统未发布错误目标，也没有退化为选择红车，故
+“证据不足时失败关闭”已经实测通过。该视角没有形成可接受的白车颜色证据，因此不能把
+本轮记为“白车正向选择成功”；需要补充能看清白车漆面的视角后再完成第 2--4 项。
+
+同一轮以 `car` 查询验证了其余闭环：GA-BSVM 发布目标表面点和同侧安全接近点，Goal
+Bridge 交给 Nav2 后 `/cmd_vel`、`/cmd_vel_champ` 与仿真位移均出现；重启 Nav2 后单个
+近距离目标只生成一个 action 并成功到达。首次长负载运行曾出现一个额外已取消 action，
+但在干净单目标复现中未再次出现，因此没有做推测性代码修改。
 
 随后完全停止当前导航目标，将机器狗置于黄车右上侧空地（历史复现起点约为
 `(5.03, -2.40)`），重新监听两个 Pose 话题并发布：
