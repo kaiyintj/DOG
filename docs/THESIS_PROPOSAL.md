@@ -349,7 +349,7 @@ CARLA 二维基准按项目文档建议至少使用 3 个 Town 和 3 个随机�
 正式实验前至少完成以下一致性修正：
 
 1. SegFormer 路线已实现完整后验路径（`segformer_use_full_posterior=true`），旧版 argmax 路径保留为回归基线。正式实验前必须在相同数据和参数下完成两条路径的二维校准和三维证据对比消融（A11/A12），以确认概率保真确实改善了下游指标；不能仅凭代码结构推出收益；
-2. 为 CLIP logits/features 增加源图像 Header，使 GA-BSVM 不再使用"最新缓存"代替同步消息；统一 `clip_node.py` 与 `clip_query.py` 的模型变体、QuickGELU 配置和文本提示策略；
+2. `clip_query.py` 已改为只发布 `/text_query`，模型变体、QuickGELU 配置和文本提示策略统一由 `clip_node.py` 处理；仍需为 CLIP logits/features 增加源图像 Header，使 GA-BSVM 不再使用“最新缓存”代替同步消息；
 3. 为查询增加状态机、自动重试、超时、取消和结果反馈，避免证据尚未累积时只能手动重复发布查询；
 4. 明确 GA-BSVM 这一代码命名与实际算法的对应关系。本报告所称核心算法是"可靠性加权 categorical Dirichlet 体素融合"；若论文需要将 GA-BSVM 展开为特定算法名称，必须补充可追溯的理论定义或更名，不能仅依据文件名扩展缩写；
 5. 完成 Gazebo 清洁进程中的 `white truck`、`yellow truck`、action、速度链和安全接近回归；

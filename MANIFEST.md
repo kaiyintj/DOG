@@ -3,8 +3,9 @@
 > Auto-maintained by ARIS skills. Tracks all generated artifacts across the research lifecycle.
 > This is a historical audit ledger, not the current project-status source. For current state use
 > `docs/PROJECT_STATUS.md`; for current commands use `docs/RUNBOOK.md`; for current Lite3 work use
-> `docs/LITE3_REAL_HANDOFF.md`; for current ARIS execution use the un-timestamped plan/tracker in
-> `refine-logs/`. Historical entries and old environment paths below must not override those files.
+> `docs/LITE3_REAL_HANDOFF.md`. The un-timestamped CARLA/ARIS plan and tracker in `refine-logs/`
+> are also historical on B disk; read them only after the user explicitly resumes that branch and
+> restores its excluded installation/data. Entries and old paths below must not override current docs.
 
 | Timestamp | Skill | File | Stage | Description |
 |-----------|-------|------|-------|-------------|

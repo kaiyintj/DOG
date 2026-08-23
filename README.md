@@ -18,8 +18,10 @@ new conversation. Use it instead of commands copied from older chats.
 Historical review reports, timestamped planning snapshots and ARIS traces are
 kept for audit, but are excluded from the default repository search by
 `.rgignore`. They are not current status sources. For current paper claims use
-`docs/THESIS_PROPOSAL.md` and `idea-stage/docs/research_contract.md`; for current
-execution use the un-timestamped plan/tracker under `refine-logs/`.
+`docs/THESIS_PROPOSAL.md` and `idea-stage/docs/research_contract.md`. The
+un-timestamped CARLA/ARIS plan and tracker under `refine-logs/` are historical on
+the migrated B disk; use them only after the user explicitly resumes that branch
+and its excluded installation and data have been restored.
 
 ## Code layout
 
@@ -101,8 +103,17 @@ transform.
 ## Python runtime dependencies
 
 Install the compatible numerical/model set instead of upgrading packages one
-by one. Install the platform-specific Torch wheel first (desktop CUDA and
-JetPack use different builds), then:
+by one. Before ROS tests or launches, inspect the selected backend, Python
+imports and ROS overlay through the single read-only interface:
+
+```bash
+source /opt/ros/humble/setup.bash
+python3 scripts/check_b_disk_runtime.py --backend clip
+```
+
+If it reports `B_DISK_RUNTIME_NOT_READY`, follow RUNBOOK section 1. After user
+approval, install the platform-specific Torch wheel (desktop CUDA and JetPack
+use different builds), then install one backend:
 
 ```bash
 python3 -m pip install --user -r requirements-segformer.txt
@@ -111,8 +122,9 @@ python3 -m pip install --user -r requirements-clip.txt
 ```
 
 `requirements-runtime-common.txt` deliberately pairs NumPy 1.26.4 with SciPy
-1.11.4. The current machine's system SciPy 1.8/NumPy 1.26 combination emits a
-compatibility warning and must not be used for final quantitative experiments.
+1.11.4 and constrains setuptools to the shared Torch 2.13/colcon-core range
+`>=77,<80`. Only `OVERALL=B_DISK_RUNTIME_READY` authorizes B-disk ROS tests or
+launches.
 `setup.py` declares runtime package names but leaves exact pins in the
 requirements files so an offline `colcon build` never replaces the host Python
 environment implicitly.
@@ -186,7 +198,8 @@ unverified and `motion_ready` remained false. The B-disk copy is a compact
 evidence archive: reports, logs, generated configuration, manifests and hashes
 are retained, while the reproducible `merged/` and `output_bag/` payloads are
 intentionally omitted. The immutable source bags remain available separately.
-For migration or offline recovery, follow the
+Validate that compact archive with
+`scripts/verify_lite3_migrated_archive.py`, then follow the
 [offline reproduction and migration checklist](docs/RUNBOOK.md#89-离线复现与迁移备份清单)
 so the raw capture, canonical smoke result, model cache, robot-side
 configuration and hardware evidence remain available.

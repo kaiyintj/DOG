@@ -1,6 +1,6 @@
 # 当前版本状态
 
-更新日期：2026-08-22
+更新日期：2026-08-23
 
 本文描述 `~/ws` 当前工作区中的实际代码。后续讨论、实验和新对话应以本文、
 `RUNBOOK.md` 及当前源码为准，不再以旧聊天记录中的命令为准。
@@ -81,11 +81,14 @@ B 盘精简归档保留报告、日志、配置和哈希，但不含 `merged/`�
   名称解析，遗留 `/map` 发布默认关闭；
 - SegFormer 训练现在支持独立 `calibration/test`：`val` 只选模，最终阈值优先使用
   `test`，报告绑定 checkpoint SHA-256；缺少独立 test 时明确标为非正式结果；
-- 本轮等价完整回归为 `184 passed, 1 skipped`，flake8/pep257 均通过；单包
-  `colcon build`、两个 Nav2 入口解析和实际图片离线推理均已通过；
-- Git 基线位于 B 盘本地 `main`，HEAD 为 `d27c103`，该提交已包含此前运行时、配置和
-  文档修正。A 盘文档来源 commit 为 `f9b75de`；当前未提交修改把它迁入 B 盘并适配精简
-  归档，未修改算法、配置或测试，用户最终审查前不得提交、推送或清理；
+- 算法基线当时的等价完整回归为 `184 passed, 1 skipped`；2026-08-23 B 盘
+  重建后的当前完整测试为 `250 passed, 1 skipped`。flake8/pep257、三包
+  `colcon build`、两个 Nav2 入口解析和实际图片离线推理均有通过记录；
+- 算法与实验基线为 `d27c103`；A 盘交接文档来源为 `f9b75de`。包含本文的 B 盘适配
+  版本未改变核心融合算法、正式 YAML 或既有实验结论；它新增 B 盘只读校验/预检
+  工具及其定向测试，补充 Torch/colcon 共同支持的 setuptools 约束，并把旧
+  `clip_query` 的重复模型加载收敛为 `/text_query` 便捷发布器。当前分支、HEAD、
+  远端差异和工作区状态只以本文第 9 节列出的 Git 命令为准；
 - Lite3 当前下一阶段是外参、TF、SDK 安全桥和受控运动 Bag，不是重复静止烟测。Gazebo
   仍有一项独立仿真回归待办：在全新进程和空 GA-BSVM 体素图中，用
   `school_parking_lot.world` 复测 `white truck`/`yellow truck`，并确认
@@ -321,11 +324,12 @@ LiDAR-相机外参仍是占位值，因此 `projection_calibration_verified` 必
 - 三套 YAML 可解析，类别、代价、尺寸约束长度均为 13；
 - 39 个 Lite3 采集、时间戳和离线烟测专项测试通过；
 - 2026-08-11 的 SegFormer 完整后验、类别、微调、主动感知、Goal Bridge、连续时间
-  体素融合和导航配置回归已纳入测试；分组运行等价完整结果为
-  `184 passed, 1 skipped`，flake8/pep257 均通过。警告仅来自已知的 SciPy/NumPy
+  体素融合和导航配置回归已纳入测试；当时分组运行的等价完整结果为
+  `184 passed, 1 skipped`，flake8/pep257 均通过，当时的警告来自 SciPy/NumPy
   版本范围不一致；
-- `colcon build --symlink-install --packages-select semantic_mapping` 通过；
-- `ros2 pkg executables semantic_mapping` 可安装 12 个入口，包含
+- 2026-08-23 B 盘重建后的当前完整测试为 `250 passed, 1 skipped`，flake8/pep257
+  通过；Livox 消息包、FAST-LIO 和 `semantic_mapping` 均已在 B 盘成功构建；
+- `ros2 pkg executables semantic_mapping` 当前安装 14 个入口，包含
   `nav_goal_bridge_node`、`segformer_dataset`、`segformer_finetune`、
   `segformer_checkpoint` 和 `segformer_image`；
 - 标准 ROS 2 launch 能从 package share 找到配置；
@@ -373,10 +377,16 @@ LiDAR-相机外参仍是占位值，因此 `projection_calibration_verified` 必
 上述 M2DGR 坐标证明“查询 -> 聚类 -> 目标表面簇位置 -> 安全接近点”接口已经工作，但没有
 物体真值，不能据此宣称定位误差达标；Bag 也没有机器人执行器，不能验证导航成功率。
 
-当前 Python 环境仍会报告 SciPy 1.8 要求 NumPy `<1.25`、实际 NumPy 为 `1.26.4` 的
-警告。仓库已新增 `requirements-runtime-common.txt`，固定为 NumPy 1.26.4 +
-SciPy 1.11.4，并为 SegFormer/CLIP 分开声明模型依赖；当前全局环境未被自动修改。正式
-实验前应在隔离环境安装锁定组合并保存 `pip freeze`。
+2026-08-23 已把 B 盘用户环境切换到 NumPy 1.26.4、SciPy 1.11.4、
+OpenCLIP 3.3.0 和 setuptools 79.0.1；`cv_bridge`、OpenCLIP 与 Livox `CustomMsg`
+均可导入。`livox_ros_driver2` 以 message-only 模式构建，FAST-LIO 使用 B 盘
+本地官方 `pcl_ros` 包配置，然后与 `semantic_mapping` 一起成功构建。实时预检得到
+`OVERALL=B_DISK_RUNTIME_READY`，完整测试为 `250 passed, 1 skipped`。
+
+当前全局 `pip check` 仍报告用户安装的 OpenCV 5 声明 NumPy `>=2`，以及与本项目
+无关的 PyNaCl/cffi 问题；`cv2` 实际导入通过，本项目源码也不直接导入它。
+这些告警未被擅自扩大修复。实时环境状态继续只以
+`python3 scripts/check_b_disk_runtime.py --backend clip` 的输出为准。
 
 ## 7. 未实现或未充分验证
 
@@ -428,12 +438,22 @@ SciPy 1.11.4，并为 SegFormer/CLIP 分开声明模型依赖；当前全局环�
 
 ## 9. Git 状态说明
 
-B 盘 `~/ws/src/semantic_mapping` 位于本地 `main`，基线 HEAD 为
-`d27c1032f97d8e744c3ee2f2ef196c00ea6bac7e`；迁移开始前工作区干净。该提交已包含
-CameraInfo/投影失败关闭、Lite3 速度链、Nav2 里程计配置、离线烟测工具和 CARLA
-诊断记录。
+B 盘算法与实验基线为
+`d27c1032f97d8e744c3ee2f2ef196c00ea6bac7e`。该提交已包含 CameraInfo/投影失败关闭、
+Lite3 速度链、Nav2 里程计配置、离线烟测工具和 CARLA 诊断记录。A 盘交接文档来源为
+`f9b75ded0d5d8cbe207d22c5491b04800b1f8801`；B 盘在其内容基础上适配了实际数据路径、
+精简烟测归档、严格迁移验证和运行时预检，未改变核心融合算法或正式 YAML；新增
+B 盘只读工具及其定向测试，补充开发环境约束，并修正 `clip_query` 的重复模型加载和
+回调内关闭 ROS 所导致的特征不一致与退出死锁。
 
-当前未提交修改以 A 盘 `f9b75de` 为文档来源，并进一步把 README、PROJECT_STATUS、
-LITE3_REAL_HANDOFF、RUNBOOK、AGENTS、MANIFEST 和默认搜索规则适配到 B 盘的实际路径与
-精简烟测归档；未修改算法源码、正式 YAML 或测试。用户最终审查前不要提交、推送、
-覆盖或清理这些修改。
+Git 是分支、HEAD、远端差异和工作区状态的唯一实时来源。新任务开始时在项目根目录
+执行：
+
+```bash
+git branch --show-current
+git log -1 --oneline --decorate
+git status --short --branch
+```
+
+包含本文的版本就是当前 B 盘适配内容；不要在本文复制会随下一次提交立即过期的 HEAD、
+ahead 数量或 dirty 文件清单。提交、推送和清理仍分别需要用户授权。

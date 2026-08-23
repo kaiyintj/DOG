@@ -1,33 +1,92 @@
 # 运行手册
 
-更新日期：2026-08-22
+更新日期：2026-08-23
 
 本手册只描述 `~/ws` 当前代码可以实际执行的流程。系统能力边界见
 [PROJECT_STATUS.md](PROJECT_STATUS.md)。
 
 ## 1. 通用准备
 
-每个新终端都先执行：
+B 盘迁移故意未复制 `build/`、`install/` 和 `log/`。不要从 A 盘复制旧构建产物；
+先通过唯一的只读预检入口确认 B 盘实际缺口：
 
 ```bash
 source /opt/ros/humble/setup.bash
-source ~/ws/install/setup.bash
+export HF_HOME=/home/yk/ws/.cache/huggingface
+cd /home/yk/ws/src/semantic_mapping
+python3 scripts/check_b_disk_runtime.py --backend clip
 ```
 
-第一条加载 ROS 2 Humble 的命令、消息和系统包；第二条把当前工作区编译出的
-`semantic_mapping`、FAST-LIO、Go2 等包叠加到环境中。环境变量不会自动继承到另一个
-新终端，所以每个终端都要执行。
+如果要检查 SegFormer 而不是当前离线 CLIP 烟测链，只把最后一个参数改为
+`--backend segformer`。脚本直接读取对应 requirements，并通过同一个接口检查：
 
-只在运行 SegFormer 的终端设置：
+- NumPy/SciPy/Pillow 及所选 backend 的版本约束；
+- `rclpy`、`rosbag2_py`、`cv_bridge`、Livox 消息和模型模块导入；
+- `livox_ros_driver2`、`fast_lio`、`semantic_mapping` 是否存在于当前 ROS overlay，
+  以及 FAST-LIO/CLIP/GA-BSVM 的关键可执行入口是否已安装。
+
+只有全部项通过时才输出 `OVERALL=B_DISK_RUNTIME_READY`。
+`B_DISK_RUNTIME_NOT_READY` 表示环境或构建尚未完成，不是迁移的 Bag/源码哈希失败。
+
+2026-08-23 首次审查时，该预检曾发现 NumPy/SciPy 版本、OpenCLIP、
+`cv_bridge` ABI 和 ROS overlay 缺口；当日已按下列步骤修复并得到
+`OVERALL=B_DISK_RUNTIME_READY`。以下命令保留为 B 盘重建流程。若未来预检再次
+报告 Python 依赖失配，先确认与桌面 CUDA 或 JetPack 对应的 Torch，
+再在同一 Python 环境安装所选 backend：
 
 ```bash
-export HF_HOME=~/ws/.cache/huggingface
+cd /home/yk/ws/src/semantic_mapping
+python3 -m pip install --user -r requirements-clip.txt
+# 如果本次选择 SegFormer，改为 requirements-segformer.txt
 ```
 
-当前 SegFormer 模型缓存在该目录。设置 `HF_HOME` 可以避免 Transformers 转而访问默认的
-`~/.cache/huggingface` 并重复下载模型。CLIP、FAST-LIO、Nav2 和 Bag 播放终端不依赖它。
+这两个文件都通过 `requirements-runtime-common.txt` 固定 NumPy 1.26.4 和
+SciPy 1.11.4，并把 setuptools 限定在 Torch 2.13 与 Humble colcon-core 共同支持的
+`>=77,<80`。不要在正在运行的 ROS 系统里临时升级数值库或 Torch。
+安装后保存 `python3 -m pip freeze`。B 盘没有 Livox-SDK2，而当前离线链只需要
+`livox_ros_driver2/msg/CustomMsg`；因此先以显式的 message-only 模式构建该包，
+再构建 FAST-LIO 和 `semantic_mapping`：
 
-修改源码或 YAML 后重新构建：
+```bash
+cd /home/yk/ws
+source /opt/ros/humble/setup.bash
+colcon build --symlink-install \
+  --base-paths /home/yk/ws/src/livox_ros_driver2 \
+  --packages-select livox_ros_driver2 \
+  --cmake-args -DLIVOX_BUILD_DRIVER=OFF
+source /home/yk/ws/install/setup.bash
+
+local_pcl_prefix=/home/yk/ws/local/ros-humble-pcl-ros/opt/ros/humble
+test -f "$local_pcl_prefix/share/pcl_ros/cmake/pcl_rosConfig.cmake"
+export CMAKE_PREFIX_PATH="$local_pcl_prefix:$CMAKE_PREFIX_PATH"
+
+colcon build --symlink-install \
+  --base-paths \
+    /home/yk/ws/src/fast_lio \
+    /home/yk/ws/src/semantic_mapping \
+  --packages-select fast_lio semantic_mapping
+source /home/yk/ws/install/setup.bash
+
+cd /home/yk/ws/src/semantic_mapping
+python3 scripts/check_b_disk_runtime.py --backend clip
+```
+
+message-only 模式不安装 `livox_ros_driver2_node`，不能用于电脑直连 Livox 硬件。
+如果未来要在 B 盘电脑上运行真实驱动，先按官方流程安装 Livox-SDK2，
+再用默认 `LIVOX_BUILD_DRIVER=ON` 单独重建该包。Lite3 机器狗上的现有驱动不受影响。
+
+FAST-LIO 配置还需要 `pcl_ros`。B 盘保留的官方 Ubuntu/ROS 包位于
+`/home/yk/ws/local/ros-humble-pcl-ros`，版本和来源见其 `RECEIPT.md`。它只需加入
+上面的 CMake 搜索路径；日常运行 FAST-LIO 时无需另外 source 该目录。
+如果未来已用 `sudo apt-get install ros-humble-pcl-ros` 完成系统安装，可不设
+`local_pcl_prefix`。
+
+构建成功后，每个新终端都重新加载 ROS 2 Humble 和该 overlay。若
+`/home/yk/ws/install/setup.bash` 不存在，就表示 B 盘环境尚未构建。
+当前 SegFormer 和 OpenCLIP 权重均位于 `/home/yk/ws/.cache/huggingface`；模型终端必须
+保留上面的 `HF_HOME`，避免离线运行查找不存在的 `/home/yk/.cache/huggingface`。
+
+只修改 `semantic_mapping` 源码或 YAML 后，可定向重新构建该包：
 
 ```bash
 cd ~/ws
@@ -74,29 +133,6 @@ CARLA 的二维图像识别基准和三维点级 reliability 基准是两套独�
 
 电动自行车数据校验、微调和权重验收流程见
 [SEGFORMER_EBIKE_FINETUNE.md](SEGFORMER_EBIKE_FINETUNE.md)。
-
-检查 Python 模型依赖和实际版本：
-
-```bash
-python3 -c "import numpy, scipy, torch, PIL, transformers; print('numpy=', numpy.__version__, 'scipy=', scipy.__version__, 'torch=', torch.__version__, 'Pillow=', PIL.__version__, 'transformers=', transformers.__version__)"
-```
-
-当前系统的 SciPy 1.8 与 NumPy 1.26 会产生版本不兼容警告。正式实验使用隔离环境，先安装
-与桌面 CUDA 或 JetPack 对应的 Torch，再安装项目锁定的数值与模型依赖：
-
-```bash
-python3 -m pip install --user -r ~/ws/src/semantic_mapping/requirements-segformer.txt
-```
-
-CLIP 对比路线另用：
-
-```bash
-python3 -m pip install --user -r ~/ws/src/semantic_mapping/requirements-clip.txt
-```
-
-不要在正在运行的 ROS 系统里临时升级 NumPy、SciPy 或 Torch，也不要让 `colcon build`
-隐式替换系统环境。锁定组合见 `requirements-runtime-common.txt`；安装后重新运行上面的
-版本检查并保存 `python3 -m pip freeze`。
 
 ### 四种运行组合
 
@@ -247,6 +283,10 @@ ros2 topic echo /goal_pose --once
 ```bash
 ros2 topic pub --once /text_query std_msgs/msg/String "{data: 'car'}"
 ```
+
+也可使用等价的一次性便捷入口
+`ros2 run semantic_mapping clip_query car`。该入口只发布 `/text_query`，不再加载第二套
+CLIP 模型；模型变体、QuickGELU 和提示模板统一由正在运行的 `clip_node` 决定。
 
 当前查询只在 `/text_query` 到达时检查一次已有地图，不会在新语义证据到达后自动重试。
 如果日志显示“未找到合适目标”，让 Bag 继续播放、等待 SegFormer 和 GA-BSVM 再融合
@@ -980,6 +1020,9 @@ ros2 launch semantic_mapping nav_lite3_real.launch.py
 ```bash
 source /opt/ros/humble/setup.bash
 source ~/ws/install/setup.bash
+export HF_HOME=/home/yk/ws/.cache/huggingface
+export HF_HUB_OFFLINE=1
+export TRANSFORMERS_OFFLINE=1
 cd ~/ws/src/semantic_mapping
 
 bash scripts/run_lite3_offline_smoke.sh \
@@ -1036,32 +1079,22 @@ Git/ROS 环境、每个进程的独立日志和 JSON/TXT 验收报告。状态�
 2026-08-18 推荐 Bag 已迁入 B 盘，2026-08-21 完整烟测已经在干净 `d27c103` 上通过。
 B 盘只保留约 1.2 MiB 的精简证据目录：manifest、源路径、日志、配置、运行图、状态、
 验收报告和哈希账本均保留，体积较大的 `merged/` 与 `output_bag/` 未迁入。因此它可验证
-历史运行结论和实现来源，但不能直接重放或重新计算输出。先执行以下只读检查：
+历史运行结论和实现来源，但不能直接重放或重新计算输出。使用唯一的只读迁移验证入口：
 
 ```bash
-set -e
-
-PROJECT_DIR=/home/yk/ws/src/semantic_mapping
-SOURCE_DIR=/home/yk/ws/lite3_bags/lite3_concurrent_20260818_203250_HsW1R7
-RUN_DIR=/home/yk/ws/lite3_offline_runs/lite3_clip_smoke_20260821T020049Z_xLnEzN
-
-test "$(cat "$RUN_DIR/OVERALL")" = ALGORITHM_STATIC_PASS_NON_GEOMETRIC
-for file in manifest.json input_validation.json merge_validation.json \
-  smoke_validation.json model_preflight.json runtime_graph.json \
-  timestamp_audit.txt source_sha256.txt implementation_sha256.txt \
-  artifact_sha256.txt logs/model_preflight.log; do
-  test -f "$RUN_DIR/$file"
-done
-
-python3 -c 'import json,sys; m=json.load(open(sys.argv[1])); assert m["git_sha"] == "d27c1032f97d8e744c3ee2f2ef196c00ea6bac7e"; assert m["git_dirty"] is False; assert m["overall"] == "ALGORITHM_STATIC_PASS_NON_GEOMETRIC"; assert m["calibration_status"] == "INTRINSICS_FROM_BAG_EXTRINSICS_UNVERIFIED"; assert m["motion_ready"] is False' "$RUN_DIR/manifest.json"
-(cd "$SOURCE_DIR" && sha256sum --quiet -c "$RUN_DIR/source_sha256.txt")
-(cd "$RUN_DIR" && sha256sum --quiet --ignore-missing -c artifact_sha256.txt)
-(cd "$PROJECT_DIR" && sha256sum --quiet -c "$RUN_DIR/implementation_sha256.txt")
+cd /home/yk/ws/src/semantic_mapping
+python3 scripts/verify_lite3_migrated_archive.py \
+  --source-dir \
+  /home/yk/ws/lite3_bags/lite3_concurrent_20260818_203250_HsW1R7 \
+  --run-dir \
+  /home/yk/ws/lite3_offline_runs/lite3_clip_smoke_20260821T020049Z_xLnEzN
 ```
 
-`artifact_sha256.txt` 是完整 A 盘运行的原始账本，仍列出未迁入的两个大目录，因此必须
-使用 `--ignore-missing`；前面的显式文件清单保证精简归档的关键证据确实存在。manifest
-和 `source_path.txt` 中的 `/home/yk/lite3_*` 是原始运行来源记录，不应改成 B 盘路径。
+成功输出必须同时包含 `SOURCE_HASHES=PASS`、`RETAINED_ARTIFACTS=PASS`、
+`EXPECTED_OMISSIONS=PASS`、`IMPLEMENTATION_HASHES=PASS` 和
+`OVERALL=B_DISK_COMPACT_ARCHIVE_PASS`。脚本要求缺失集合恰好是账本中的四个
+`merged/`/`output_bag/` 大文件，严格校验其余全部条目，并拒绝精简目录中的额外文件。
+manifest 和 `source_path.txt` 中的 `/home/yk/lite3_*` 是原始运行来源记录，不应改写。
 
 只有在代码、依赖或工作区发生变化而需要验证重建环境时，才重新运行完整烟测。使用本地
 输入时脚本只引用原始目录，不会创建 `$RUN_DIR/raw`；继续使用同一个不可变原始路径：
@@ -1089,9 +1122,10 @@ cat "$RUN_DIR/OVERALL"
    和报告。当前推荐原始 Bag 位于 `/home/yk/ws/lite3_bags`；
 2. `~/ws/src/semantic_mapping`、`~/ws/src/fast_lio` 和
    `~/ws/src/livox_ros_driver2` 的完整源码；工作区未提交文件不能只靠 Git HEAD；
-3. 当前电脑的 `~/ws/install`，不要在出差前执行清理；
-4. CLIP 权重目录
-   `~/.cache/huggingface/hub/models--timm--vit_base_patch32_clip_224.openai`；
+3. B 盘没有迁入旧 `~/ws/install`；首次成功重建后保留新的
+   `/home/yk/ws/install`，并把构建命令和结果记录到新的运行目录；
+4. SegFormer/OpenCLIP 权重目录 `/home/yk/ws/.cache/huggingface`，其中当前 CLIP
+   权重位于 `hub/models--timm--vit_base_patch32_clip_224.openai`；
 5. 机器狗独有的 `lite_cog_ros2` 源码与参数快照，尤其是 timefix 适配、实际
    MID360 JSON、RealSense launch、静态 TF、启动脚本，以及
    `transfer_ros2`/`realsense_ros2` systemd unit；

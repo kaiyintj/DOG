@@ -1,6 +1,6 @@
 # Lite3 实机下一阶段交接
 
-更新日期：2026-08-22
+更新日期：2026-08-23
 
 本文是开启新 Codex 窗口时的 Lite3 专用交接入口。新窗口应先读本文、项目根目录的
 [README.md](../README.md) 与 [AGENTS.md](../AGENTS.md)，再按需查阅
@@ -95,14 +95,18 @@ manifest 与 `source_path.txt` 中的 `/home/yk/lite3_*` 是 2026-08-21 运行�
 - 基础 Bag 验收：`scripts/verify_lite3_capture.py`；
 - 严格时间戳和标定结构审计：`scripts/audit_lite3_timestamps.py`；
 - 电脑离线烟测：`scripts/run_lite3_offline_smoke.sh`；
+- B 盘精简归档完整性验证：`scripts/verify_lite3_migrated_archive.py`；
+- B 盘 Python/ROS 运行时预检：`scripts/check_b_disk_runtime.py`；
 - 静止 FAST-LIO 配置：`config/fast_lio_lite3_offline.yaml`；
 - 受控运动数据候选配置：`config/fast_lio_lite3_real.yaml`；
 - 实机语义配置：`config/semantic_mapping_lite3_real.yaml`；
 - 完整传感器和离线命令：[RUNBOOK 第 8 节](RUNBOOK.md#8-lite3-实机传感器采集与上机前清单)。
 
-B 盘仓库位于 `main`，HEAD 为 `d27c103`。本轮未提交修改来源于 A 盘文档 commit
-`f9b75de`，并已适配 B 盘精简归档；它们只同步证据、交接入口和搜索规则，不是算法
-改动。用户最终审查前不得提交、推送或清理这些修改。
+算法与实验基线为 `d27c103`，A 盘交接文档来源为 `f9b75de`。包含本文的 B 盘适配版本
+同步证据、交接入口、路径和搜索规则，新增只读校验/预检工具与开发环境约束；同时把
+`clip_query` 收敛为 `/text_query` 便捷发布器，文本特征统一由 `clip_node` 编码。
+这些调整不改变核心融合算法、正式 YAML 或既有实验证据。
+实时 Git 状态统一按 [PROJECT_STATUS 第 9 节](PROJECT_STATUS.md#9-git-状态说明) 查询。
 
 ## 4. 新窗口首先执行的任务
 

@@ -4,13 +4,19 @@ docs/segformer_smoke_test.md
 docs/SYSTEM_REVIEW_REPORT.md
 docs/INNOVATION_METHOD_REVIEW.md
 
-# Immutable ARIS/CARLA planning snapshots. The un-timestamped current
-# plan/tracker remain searchable.
-refine-logs/EXPERIMENT_PLAN_*.md
-refine-logs/EXPERIMENT_TRACKER_*.md
-refine-logs/P1_OFFLINE_DIAGNOSTIC_TRACE*.md
-refine-logs/CARLA_CRASH_DIAG_PLAN_*.md
-refine-logs/CARLA_CRASH_DIAG_TRACKER_*.md
+# Inactive 2026-08-17 ARIS/CARLA plans and execution records. These exact
+# historical families stay auditable, while future plans are not hidden.
+refine-logs/EXPERIMENT_PLAN.md
+refine-logs/EXPERIMENT_PLAN_20260817_*.md
+refine-logs/EXPERIMENT_TRACKER.md
+refine-logs/EXPERIMENT_TRACKER_20260817_*.md
+refine-logs/P1_OFFLINE_DIAGNOSTIC_TRACE_20260817_*.md
+refine-logs/CARLA_CRASH_DIAG_PLAN.md
+refine-logs/CARLA_CRASH_DIAG_PLAN_20260817_*.md
+refine-logs/CARLA_CRASH_DIAG_TRACKER.md
+refine-logs/CARLA_CRASH_DIAG_TRACKER_20260817_*.md
+refine-logs/CARLA_CRASH_DIAG_EXECUTION_20260817_*.md
+refine-logs/CARLA_CRASH_DIAG_EXECUTION_LATEST.md
 refine-logs/EXPERIMENT_CODE_REVIEW.md
 
 # Historical planner prompts and the two old A-computer environment ledgers.
