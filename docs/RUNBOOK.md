@@ -231,7 +231,7 @@ source /opt/ros/humble/setup.bash
 source ~/ws/install/setup.bash
 
 ros2 launch fast_lio mapping.launch.py \
-  config_file:=velodyne.yaml \
+  config_file:=m2dgr.yaml \
   use_sim_time:=true \
   rviz:=true
 ```
@@ -424,7 +424,7 @@ SegFormer 使用 sensor-data QoS。如果 RViz Image 显示 `No Image` 或出现
 source /opt/ros/humble/setup.bash
 source ~/ws/install/setup.bash
 
-ros2 launch go2_config gazebo.launch.py   world:=/home/yk/ws/src/unitree-go2-ros2/unitree_go2_description/worlds/school_parking_lot.world  world_init_x:=0.0   world_init_y:=0.0   world_init_z:=0.35   cmd_vel_topic:=/cmd_vel_champ   gui:=true   rviz:=false   use_sim_time:=true
+ros2 launch go2_config gazebo.launch.py   world:=/home/yk/ws/src/unitree-go2-ros2/robots/configs/go2_config/worlds/school_parking_lot.world  world_init_x:=0.0   world_init_y:=0.0   world_init_z:=0.35   cmd_vel_topic:=/cmd_vel_champ   gui:=true   rviz:=false   use_sim_time:=true
 
 ```
 查看图像窗口
@@ -447,9 +447,9 @@ ros2 launch fast_lio mapping.launch.py \
   rviz:=true
 ```
 
-当前 Gazebo 启动链和 FAST-LIO 都可能发布 `odom -> base_link`。该组合可以用于当前
-功能调试，但如果 RViz 地图跳动、目标漂移或机器人位置不一致，应停止实验，先解决单一
-TF 权威源，不能使用这次数据做论文定量结果。
+当前 Go2 Gazebo 入口默认以 `publish_odom_tf:=false` 关闭 CHAMP 的两个里程计 EKF，
+由 FAST-LIO 作为 `odom -> base_link` 唯一候选。启动后仍须按本章检查实际 TF 发布者；
+若出现重复发布、地图跳动或目标漂移，应停止实验，不能使用这次数据做定量结果。
 
 ### 方案 A，终端 3：SegFormer
 
@@ -624,7 +624,7 @@ ros2 topic pub --once /text_query std_msgs/msg/String "{data: 'red car'}"
 本节用于验收 2026-08-04 完成的簇级颜色约束和 Nav2 action 桥接。Gazebo 世界为：
 
 ```text
-/home/yk/ws/src/unitree-go2-ros2/unitree_go2_description/worlds/school_parking_lot.world
+/home/yk/ws/src/unitree-go2-ros2/robots/configs/go2_config/worlds/school_parking_lot.world
 ```
 
 场景中的车辆中心真值约为：红车 `(7.5, 4.5)`、蓝车 `(3.2, 4.5)`、白车
@@ -635,11 +635,13 @@ ros2 topic pub --once /text_query std_msgs/msg/String "{data: 'red car'}"
 存在于进程内，重新启动能避免旧错误颜色证据继续参与本轮验收。终端 1 使用下面的世界，
 其余终端继续使用本章终端 2、方案 A 终端 3/4 和终端 5 的命令。
 
-停车场四辆车的 Gazebo 模型默认位于 `~/.gazebo/models`。启动前先确认资源完整：
+停车场四辆车模型随 `go2_config` 保存和安装，不依赖用户目录中的临时副本。重建 overlay
+后先确认已安装资源完整：
 
 ```bash
+GO2_SHARE="$(ros2 pkg prefix go2_config)/share/go2_config"
 for color in red blue white yellow; do
-  test -f ~/.gazebo/models/semantic_sedan_${color}/model.sdf || \
+  test -f "$GO2_SHARE/models/semantic_sedan_${color}/model.sdf" || \
     echo "missing semantic_sedan_${color}"
 done
 ```
@@ -650,7 +652,7 @@ done
 
 ```bash
 ros2 launch go2_config gazebo.launch.py \
-  world:=/home/yk/ws/src/unitree-go2-ros2/unitree_go2_description/worlds/school_parking_lot.world \
+  world:=/home/yk/ws/src/unitree-go2-ros2/robots/configs/go2_config/worlds/school_parking_lot.world \
   world_init_x:=0.0 \
   world_init_y:=0.0 \
   world_init_z:=0.35 \
@@ -665,7 +667,7 @@ ros2 launch go2_config gazebo.launch.py \
 
 ```bash
 gzserver --verbose \
-  /home/yk/ws/src/unitree-go2-ros2/unitree_go2_description/worlds/school_parking_lot.world
+  /home/yk/ws/src/unitree-go2-ros2/robots/configs/go2_config/worlds/school_parking_lot.world
 ```
 
 成功标志是：
@@ -768,7 +770,7 @@ ros2 topic pub --once /text_query std_msgs/msg/String "{data: 'yellow truck'}"
 静态 person 测试使用：
 
 ```text
-/home/yk/ws/src/unitree-go2-ros2/unitree_go2_description/worlds/outdoor_semantic_benchmark.world
+/home/yk/ws/src/unitree-go2-ros2/robots/configs/go2_config/worlds/outdoor_semantic_benchmark.world
 ```
 
 将终端 1 的 `world` 替换为该文件，然后查询：

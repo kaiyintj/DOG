@@ -150,8 +150,8 @@ CLIP 与 SegFormer 是两套可替换的语义前端，不应在同一次实验�
   `NavigateToPose` action，但仍需在每套底盘接口上做闭环验收；
 - 文本查询目前只在消息到达时检查一次地图；若当时证据不足，地图后续增长不会自动
   重试，必须再次发布查询；
-- Gazebo 中 CHAMP 与 FAST-LIO 都可能发布 `odom -> base_link`，正式实验前必须只保留
-  一个 TF 权威源；
+- 当前 Go2 Gazebo 入口默认关闭 CHAMP 的两个里程计 EKF，由 FAST-LIO 作为
+  `odom -> base_link` 唯一候选；全新回归仍必须实测确认只有一个发布者；
 - Lite3 的传感器话题和录包链路已确认，运行时内参读取与失败关闭保护已实现；但
   LiDAR-相机外参、完整 TF 权威关系和底盘 SDK 安全桥尚未验收；
 - 尚无实例分割、跨帧物体 ID、动态目标跟踪和三维实例图。
@@ -175,15 +175,15 @@ CLIP 与 SegFormer 是两套可替换的语义前端，不应在同一次实验�
 ### 3.1 定位与点云前端
 
 - 算法：FAST-LIO；
-- Bag 配置：`fast_lio/config/velodyne.yaml`；
+- Bag 配置：`fast_lio/config/m2dgr.yaml`；
 - Gazebo 配置：`fast_lio/config/sim_mid360.yaml`；
 - Lite3 静止烟测：`semantic_mapping/config/fast_lio_lite3_offline.yaml`；
 - Lite3 受控运动数据候选：`semantic_mapping/config/fast_lio_lite3_real.yaml`；
 - 主要输出：`/Odometry`、`/cloud_registered`、`/cloud_registered_body`、TF
   `odom -> base_link`。
 
-注意：FAST-LIO 发布的是大写 `/Odometry`，Gazebo 中 `/odom` 通常由
-CHAMP/robot_localization 提供。Nav2 配置默认仍读取 `/odom`，但
+注意：FAST-LIO 发布的是大写 `/Odometry`；当前 Go2 Gazebo 入口默认关闭
+CHAMP/robot_localization 的里程计 TF。Nav2 配置默认仍读取 `/odom`，但
 `nav_lite3_real.launch.py` 默认把 Nav2 改写到 `/Odometry`。该重写只解决消息话题，
 不会自动解决重复的 `odom -> base_link` TF；实机必须先确定唯一 TF 权威源。
 
