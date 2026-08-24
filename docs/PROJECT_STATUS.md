@@ -29,6 +29,28 @@
 - `CALIBRATION_STRUCTURE=NOT_READY`；
 - `MOTION_READY=NO`。
 
+A 盘当前以只读方式挂载在
+`/media/yk/4c9f99c6-3dbe-ce4b-9af5-90b358433e04`，只用于迁移比对和恢复；
+B 盘 `/home/yk/ws` 是电脑端唯一运行工作区。A 盘另有完整
+`yk/Livox-SDK2_backup` 源码仓库（`v1.3.1`，`f5d9375`），但未复制、安装或链接到
+B 盘；当前电脑离线链仍使用 Livox message-only 构建，不能据此宣称电脑端硬件驱动可用。
+
+2026-08-23 清理前存档位于
+`/home/yk/ws/_pre_cleanup_archive/20260823T_cleanup_predelete_01`。经逐批批准，B 盘已移除
+旧 Go1 仓库、34 个历史/重复跟踪文件以及 Python/pytest 缓存；删除后完整回归仍为
+`257 passed, 1 skipped`。随后经单独批准，又删除了 124 个已归档 CARLA 历史诊断记录
+和 6 个可重新下载的地图缓存；当前 CARLA 代码、测试、两份 benchmark 文档和 Motion V2
+结果仍保留，下一次 CARLA 运行会按需重新下载地图缓存。失败烟测诊断和当前完整成功烟测
+继续保留。B07 经单独批准后已删除 4240 个旧 `build/install/log` 对象，并从明确源码路径
+重新构建 15 个当前包；CLIP/SegFormer 预检、`257 passed, 1 skipped` 回归及两套 Lite3
+证据复验均通过。之后 17:19 的一次 15 包增量构建也在事件账本中全部以 `rc=0` 完成；
+当前 overlay 已再次通过相同预检、回归和证据复验。新 `build/install` 保留。最初 82 个
+colcon 日志的 B08 已被后续构建状态取代；后续 163 个日志对象和 13 个 Python 字节码缓存
+已作为精确 B09 存档，并在逐项批准后删除。当前新 `build/install` 保留，`log` 和源码缓存
+为空。本轮全新 Gazebo 验收尚未完成：首次重试与 11345 端口上
+已有 Gazebo master 冲突，未生成机器人或控制器结果，因此不得沿用此前仿真记录宣称本轮
+重建后的闭环已通过。该存档与项目位于同一 B 盘，只防误删，不防物理盘故障。
+
 当前完整烟测使用 CPU CLIP，只验证静止数据上的 FAST-LIO、CLIP、GA-BSVM 和语义
 costmap 软件链；它不是 SegFormer 性能实验，不验证 LiDAR--相机投影几何，也不授权运动。
 历史精简归档保留报告、日志、配置和哈希，但不含 `merged/`、`output_bag/`，不能直接重放。
@@ -87,8 +109,8 @@ costmap 软件链；它不是 SegFormer 性能实验，不验证 LiDAR--相机�
 - SegFormer 训练现在支持独立 `calibration/test`：`val` 只选模，最终阈值优先使用
   `test`，报告绑定 checkpoint SHA-256；缺少独立 test 时明确标为非正式结果；
 - 算法基线当时的等价完整回归为 `184 passed, 1 skipped`；2026-08-23 B 盘
-  重建后的当前完整测试为 `257 passed, 1 skipped`。flake8/pep257、三包
-  `colcon build`、两个 Nav2 入口解析和实际图片离线推理均有通过记录；
+  B07 干净重建后的当前完整测试为 `257 passed, 1 skipped`。flake8/pep257、15 包
+  显式路径 `colcon build`、两个 Nav2 入口解析和实际图片离线推理均有通过记录；
 - 算法与实验基线为 `d27c103`；A 盘交接文档来源为 `f9b75de`。包含本文的 B 盘适配
   版本未改变核心融合算法、正式 YAML 或既有实验结论；它新增 B 盘只读校验/预检
   工具及其定向测试，补充 Torch/colcon 共同支持的 setuptools 约束，并把旧
@@ -465,6 +487,10 @@ B 盘只读工具及其定向测试，补充开发环境约束，并修正 `clip
 context，context 仍有效时继续抛出真实错误。当前完整 B 盘烟测的
 manifest 绑定干净验证提交 `b86008dc703bc7be5e4fcd11ce4f56b413290d41`；历史精简归档
 仍绑定 `d27c103`，两者不互相覆盖。
+
+A 盘六个仓库是只读迁移基线和恢复来源，B 盘仓库包含后续适配提交及保留的用户改动；
+不得用 A 盘旧 `build/install` 或旧提交覆盖 B 盘。A 盘的 Livox-SDK2 v1.3.1 也只是
+源码来源记录，不属于当前 B 盘 overlay。
 
 Git 是分支、HEAD、远端差异和工作区状态的唯一实时来源。新任务开始时在项目根目录
 执行：

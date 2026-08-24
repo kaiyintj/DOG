@@ -84,6 +84,19 @@ def _archive(tmp_path):
     return source, run, project
 
 
+def test_archive_from_another_revision_fails(tmp_path):
+    """Reject an archive that is not the recorded historical baseline."""
+    source, run, project = _archive(tmp_path)
+    manifest_path = run / "manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["git_sha"] = "a" * 40
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+
+    with pytest.raises(
+            MODULE.MigrationValidationError, match="manifest git_sha"):
+        MODULE.validate_migration(source, run, project)
+
+
 def test_valid_compact_archive_passes(tmp_path):
     """Accept an archive containing every retained ledger entry."""
     source, run, project = _archive(tmp_path)

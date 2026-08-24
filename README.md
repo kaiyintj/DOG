@@ -15,13 +15,11 @@ The status document distinguishes implemented code from validated behavior and
 known deployment gaps. Its `新对话交接摘要` section is the handoff point for a
 new conversation. Use it instead of commands copied from older chats.
 
-Historical review reports, timestamped planning snapshots and ARIS traces are
-kept for audit, but are excluded from the default repository search by
-`.rgignore`. They are not current status sources. For current paper claims use
-`docs/THESIS_PROPOSAL.md` and `idea-stage/docs/research_contract.md`. The
-un-timestamped CARLA/ARIS plan and tracker under `refine-logs/` are historical on
-the migrated B disk; use them only after the user explicitly resumes that branch
-and its excluded installation and data have been restored.
+Historical review reports, planning snapshots, ARIS traces and autonomous-run
+diagnostics are archive evidence, not current status sources or executable
+instructions. Base current claims on `PROJECT_STATUS.md`, the two maintained
+CARLA benchmark documents and the source-controlled Motion V2 results. Restoring
+an archived historical experiment does not make it a current project baseline.
 
 ## Code layout
 

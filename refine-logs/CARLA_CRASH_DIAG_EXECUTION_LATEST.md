@@ -1,9 +1,0 @@
----
-latest: CARLA_CRASH_DIAG_EXECUTION_20260817_172827.md
-updated: 2026-08-17T17:28:27+08:00
-status: complete
----
-
-# Latest CARLA crash-diagnosis execution
-
-See [`CARLA_CRASH_DIAG_EXECUTION_20260817_172827.md`](CARLA_CRASH_DIAG_EXECUTION_20260817_172827.md).

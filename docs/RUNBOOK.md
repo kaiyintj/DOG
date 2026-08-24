@@ -50,9 +50,11 @@ OpenCV 5 覆盖系统 OpenCV 4.5.4，使 SegFormer 每帧在 RGB 消息转换时
 这两个文件都通过 `requirements-runtime-common.txt` 固定 NumPy 1.26.4 和
 SciPy 1.11.4，并把 setuptools 限定在 Torch 2.13 与 Humble colcon-core 共同支持的
 `>=77,<80`。不要在正在运行的 ROS 系统里临时升级数值库或 Torch。
-安装后保存 `python3 -m pip freeze`。B 盘没有 Livox-SDK2，而当前离线链只需要
+安装后保存 `python3 -m pip freeze`。B 盘没有安装 Livox-SDK2，而当前离线链只需要
 `livox_ros_driver2/msg/CustomMsg`；因此先以显式的 message-only 模式构建该包，
-再构建 FAST-LIO 和 `semantic_mapping`：
+再构建 FAST-LIO 和 `semantic_mapping`。A 盘只读位置
+`/media/yk/4c9f99c6-3dbe-ce4b-9af5-90b358433e04/yk/Livox-SDK2_backup`
+保留 v1.3.1 源码，但它不是 B 盘已安装依赖，不能在本流程中直接加载或覆盖 B 盘：
 
 ```bash
 cd /home/yk/ws
@@ -71,16 +73,31 @@ colcon build --symlink-install \
   --base-paths \
     /home/yk/ws/src/fast_lio \
     /home/yk/ws/src/semantic_mapping \
-  --packages-select fast_lio semantic_mapping
+    /home/yk/ws/src/unitree-go2-ros2 \
+    /home/yk/ws/src/livox_laser_simulation_RO2 \
+  --packages-select \
+    fast_lio semantic_mapping ros2_livox_simulation \
+    champ champ_base champ_bringup champ_config champ_description \
+    champ_gazebo champ_msgs champ_navigation champ_teleop \
+    go2_config go2_description
 source /home/yk/ws/install/setup.bash
 
 cd /home/yk/ws/src/semantic_mapping
 python3 scripts/check_b_disk_runtime.py --backend clip
 ```
 
+2026-08-23 的 B07 条件清理按上述两阶段流程重建成功；15 个选定包均来自这五个明确
+源码根（Livox message-only 单独作为第一阶段），不会扫描同盘清理存档或重新生成旧 Go1
+包。新 `build/install` 是当前运行环境。后续增量构建产生的新 `log` 和 Python 字节码缓存
+只属于可重建诊断/缓存。2026-08-24 已按精确的
+`B09_current_generated_logs_and_caches.tar.zst` 176 项清单批准并删除当时的生成物；
+较早的 B08 只保留为历史构建记录。未来再次构建或运行测试后产生的新日志/缓存不属于
+B09，必须重新生成当前清单和存档、再次取得明确批准，不能沿用旧批准。
+
 message-only 模式不安装 `livox_ros_driver2_node`，不能用于电脑直连 Livox 硬件。
-如果未来要在 B 盘电脑上运行真实驱动，先按官方流程安装 Livox-SDK2，
-再用默认 `LIVOX_BUILD_DRIVER=ON` 单独重建该包。Lite3 机器狗上的现有驱动不受影响。
+如果未来要在 B 盘电脑上运行真实驱动，应先单独审查 SDK 来源与安装范围，再按官方
+流程在 B 盘安装 Livox-SDK2，并用默认 `LIVOX_BUILD_DRIVER=ON` 单独重建该包；A 盘始终
+保持只读。Lite3 机器狗上的现有驱动不受影响。
 
 FAST-LIO 配置还需要 `pcl_ros`。B 盘保留的官方 Ubuntu/ROS 包位于
 `/home/yk/ws/local/ros-humble-pcl-ros`，版本和来源见其 `RECEIPT.md`。它只需加入

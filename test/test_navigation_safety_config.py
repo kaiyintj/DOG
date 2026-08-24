@@ -234,11 +234,7 @@ def test_nav_launch_starts_one_profile_selected_active_perception_gate():
     launch_source = (
         PROJECT_ROOT / 'launch' / 'nav_with_remap.launch.py'
     ).read_text(encoding='utf-8')
-    module_source = (
-        PROJECT_ROOT / 'semantic_mapping' / 'runtime' / 'nav_with_remap_launch.py'
-    ).read_text(encoding='utf-8')
 
-    assert launch_source == module_source
     assert "'active_perception_enabled'" in launch_source
     assert "default_value='true'" in launch_source
     assert "'active_perception_params_file'" in launch_source

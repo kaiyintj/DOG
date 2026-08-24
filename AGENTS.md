@@ -8,11 +8,12 @@
 2. For Lite3 collection, calibration, mapping, SDK or navigation work, also read
    [docs/LITE3_REAL_HANDOFF.md](docs/LITE3_REAL_HANDOFF.md) and the relevant section of
    [docs/RUNBOOK.md](docs/RUNBOOK.md). Lite3 is the default active branch of work.
-3. For CARLA/ARIS work, read [refine-logs/AGENTS.md](refine-logs/AGENTS.md),
-   [refine-logs/EXPERIMENT_PLAN.md](refine-logs/EXPERIMENT_PLAN.md) and
-   [refine-logs/EXPERIMENT_TRACKER.md](refine-logs/EXPERIMENT_TRACKER.md) only after
-   the user explicitly resumes that experiment and its excluded installation/data are
-   restored. On the migrated B-disk snapshot, `AUTO_DEPLOY=false`.
+3. For CARLA work, use the current
+   [image benchmark](docs/CARLA_IMAGE_BENCHMARK.md),
+   [reliability benchmark](docs/CARLA_RELIABILITY_BENCHMARK.md) and
+   [Motion V2 results](docs/results/carla_motion_v2_20260813/README.md).
+   Historical plans, ARIS traces and autonomous-run diagnostics are archive evidence,
+   not current instructions. On the migrated B-disk snapshot, `AUTO_DEPLOY=false`.
 
 ## Stable safety invariants
 
