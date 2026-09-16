@@ -5,6 +5,7 @@ from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration
+from launch_ros.actions import Node
 
 
 def generate_launch_description():
@@ -12,7 +13,7 @@ def generate_launch_description():
     core_launch = os.path.join(
         package_share, 'launch', 'nav_with_remap.launch.py')
     default_nav2_params = os.path.join(
-        package_share, 'config', 'nav2_params.yaml')
+        package_share, 'config', 'nav2_sim_params.yaml')
     simulation_profile = os.path.join(
         package_share, 'config', 'semantic_mapping_sim_livox.yaml')
 
@@ -50,12 +51,16 @@ def generate_launch_description():
             'goal_bridge_enabled',
             default_value='true',
             description='Forward semantic goals to Nav2 in simulation.'),
+        Node(
+            package='semantic_mapping', executable='planar_odom_velocity',
+            parameters=[{'use_sim_time': use_sim_time, 'input_topic': odom_topic,
+                         'output_topic': '/navigation/odometry'}]),
         IncludeLaunchDescription(
             PythonLaunchDescriptionSource(core_launch),
             launch_arguments={
                 'use_sim_time': use_sim_time,
                 'params_file': params_file,
-                'odom_topic': odom_topic,
+                'odom_topic': '/navigation/odometry',
                 'active_perception_enabled': active_perception_enabled,
                 'active_perception_params_file': (
                     active_perception_params_file),

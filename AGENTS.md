@@ -2,12 +2,12 @@
 
 ## Default workflow
 
-1. Read [docs/PROJECT_STATUS.md](docs/PROJECT_STATUS.md) for the current capability and
-   migration state. Its Git-status commands are the only realtime source for branch,
-   HEAD, remote divergence and dirty files.
+1. Read [docs/PROJECT_STATUS.md](docs/PROJECT_STATUS.md) for capability, experiment planning
+   or migration questions. For scoped edits, read relevant code and task documentation.
+   Use Git directly for current branch, HEAD and dirty state; historical claims are not realtime evidence.
 2. For Lite3 collection, calibration, mapping, SDK or navigation work, also read
    [docs/LITE3_REAL_HANDOFF.md](docs/LITE3_REAL_HANDOFF.md) and the relevant section of
-   [docs/RUNBOOK.md](docs/RUNBOOK.md). Lite3 is the default active branch of work.
+   [docs/RUNBOOK.md](docs/RUNBOOK.md). The user's current request determines the active workstream.
 3. For CARLA work, use the current
    [image benchmark](docs/CARLA_IMAGE_BENCHMARK.md),
    [reliability benchmark](docs/CARLA_RELIABILITY_BENCHMARK.md) and
@@ -17,9 +17,10 @@
 
 ## Stable safety invariants
 
-- Keep `projection_calibration_verified=false`, `goal_bridge_enabled=false` and
+- For Lite3 real-robot work, keep `projection_calibration_verified=false`, `goal_bridge_enabled=false` and
   `MOTION_READY=NO` until the real LiDAR-camera calibration, TF authority, SDK safety
-  bridge and controlled-motion gates in the handoff are accepted.
+  bridge and controlled-motion gates in the handoff are accepted. Gazebo uses its own
+  simulation profile and may enable navigation; this does not authorize hardware motion.
 - Keep the Lite3 command path fail-closed: `/cmd_vel_lite3_safe` has no chassis
   executor until an accepted vendor-SDK bridge provides limits, mode/state checks,
   watchdog zeroing, network-loss stopping and an independent emergency stop.
@@ -53,8 +54,9 @@
 - The current rebuild evidence retains its full `merged/` and `output_bag/` payloads and
   records `ALGORITHM_STATIC_PASS_NON_GEOMETRIC`; it still records
   `motion_ready=false` and unverified extrinsics.
-- Validate this evidence through the migration command in RUNBOOK section 8.9 before
-  claiming that the archive is complete.
+- Locate the current archive verification procedure in the Lite3 handoff and referenced
+  verification scripts before claiming archive completeness. The former RUNBOOK section
+  8.9 reference is obsolete; if the current procedure is unavailable, report that limitation.
 - Before claiming that B-disk ROS execution works, require
   `scripts/check_b_disk_runtime.py --backend <clip|segformer>` to report
   `OVERALL=B_DISK_RUNTIME_READY`; archive integrity and runtime readiness are separate.
@@ -65,6 +67,20 @@
   documentation links and `git diff --check` pass.
 - Report skipped builds, launches or hardware checks explicitly. Historical A-disk
   results do not prove that the rebuilt B-disk environment can execute them.
+- Documentation edits need path/content and diff checks; behavior changes need affected
+  tests; runtime requests need observed runtime results. Continue authorized local fixes
+  and relevant verification without asking at each step. Broaden tests for affected shared
+  behavior, safety or failures, rather than every edit.
+
+## Experiment artifacts
+
+- Indoor Gazebo results belong in `/home/yk/ws/indoor_benchmark_runs/<world>/<timestamp>_<purpose>/`.
+  Explain purpose, actual configuration, procedure and outcome in one batch README.
+  Source manifests stay in `benchmark/`; logs and recordings stay with their batch.
+- Match the tested procedure to the claim: manual mapping then navigation differs from
+  stationary observation then querying. Logs alone are not sensor bags.
+- Separate startup failures, target/approach failures and navigation outcomes. One success
+  establishes feasibility; comparisons require matched conditions and all attempts accounted for.
 
 ## 范围约束（HERO：反过度防御）
 
@@ -96,3 +112,20 @@
 跑任何检查之前先回答:这次运行会检测出什么具体的失败?真出现了我下一步会做什么不同的事?
 答不上来就别跑。
 对的就说对。不要为了交差硬找问题。
+
+## Agent skills
+
+### Issue tracker
+
+Issues and specifications use GitHub Issues in `kaiyintj/DOG`. For issue work,
+read [docs/agents/issue-tracker.md](docs/agents/issue-tracker.md).
+
+### Triage labels
+
+Use the five canonical triage labels. For issue classification,
+read [docs/agents/triage-labels.md](docs/agents/triage-labels.md).
+
+### Domain docs
+
+This repository uses a single-context layout. For domain exploration,
+read [docs/agents/domain.md](docs/agents/domain.md).

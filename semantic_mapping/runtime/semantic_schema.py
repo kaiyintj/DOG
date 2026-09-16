@@ -2,143 +2,40 @@
 """Shared semantic classes, query aliases and color attribute scoring."""
 
 import colorsys
-import re
 
 import numpy as np
 
-
-DEFAULT_CLASSES = (
-    'road',
-    'building',
-    'tree',
-    'person',
-    'car',
-    'truck',
-    'bus',
-    'bicycle',
-    'electric_bicycle',
-    'motorcycle',
-    'chair',
-    'bench',
-    'unknown background',
+from semantic_mapping.runtime.semantic_profile import (
+    COLOR_ALIASES,
+    DEFAULT_CLASSES,
+    DEFAULT_CLASS_COLORS,
+    DEFAULT_QUERY_MAX_EXTENTS_M,
+    DEFAULT_SEMANTIC_COSTS,
+    QUERY_CLASS_ALIASES,
+    SEGFORMER_LABEL_ALIASES,
+    normalize_label,
+    parse_semantic_query,
 )
 
-DEFAULT_CLASS_COLORS = (
-    (120, 120, 120),  # road
-    (210, 210, 210),  # building
-    (0, 160, 0),      # tree
-    (255, 0, 0),      # person
-    (0, 90, 255),     # car
-    (255, 140, 0),    # truck
-    (150, 70, 200),   # bus
-    (0, 220, 220),    # bicycle
-    (70, 170, 255),   # electric_bicycle
-    (255, 0, 180),    # motorcycle
-    (160, 100, 40),   # chair
-    (255, 220, 0),    # bench
-    (50, 50, 50),     # unknown background
+
+__all__ = (
+    'COLOR_ALIASES', 'DEFAULT_CLASSES', 'DEFAULT_CLASS_COLORS',
+    'DEFAULT_QUERY_MAX_EXTENTS_M', 'DEFAULT_SEMANTIC_COSTS',
+    'QUERY_CLASS_ALIASES', 'SEGFORMER_LABEL_ALIASES', 'normalize_label',
+    'parse_semantic_query', 'color_membership_score', 'convert_image_to_rgb',
+    'resolve_clip_model_name', 'should_run_inference',
 )
 
-DEFAULT_SEMANTIC_COSTS = (
-    0,
-    100,
-    100,
-    100,
-    100,
-    100,
-    100,
-    100,
-    100,
-    100,
-    100,
-    100,
-    -1,
-)
 
-DEFAULT_QUERY_MAX_EXTENTS_M = (
-    100.0,  # road
-    100.0,  # building
-    100.0,  # tree
-    1.5,    # person
-    5.0,    # car
-    9.0,    # truck
-    14.0,   # bus
-    3.0,    # bicycle
-    3.5,    # electric_bicycle
-    3.5,    # motorcycle
-    2.0,    # chair
-    4.0,    # bench
-    100.0,  # unknown background
-)
-
-# ADE20K and Cityscapes labels mapped into the compact navigation and
-# retrieval vocabulary. Aliases are matched by name, so both label sets share
-# one table: 'vegetation' and 'rider' come from Cityscapes, the plant/grass
-# and windowpane terms from ADE20K. 'rider' folds cyclists into 'person' so a
-# navigating robot treats them as humans to avoid.
-SEGFORMER_LABEL_ALIASES = {
-    0: {'road', 'sidewalk', 'path'},
-    1: {'building', 'wall', 'house', 'fence', 'door', 'windowpane'},
-    2: {'tree', 'plant', 'grass', 'flower', 'vegetation'},
-    3: {'person', 'rider'},
-    4: {'car', 'van', 'auto', 'automobile', 'motorcar'},
-    5: {'truck'},
-    6: {'bus'},
-    7: {'bicycle'},
-    # Cityscapes/ADE20K have no electric-bicycle class. These aliases make the
-    # project compatible with a custom SegFormer checkpoint while the stock
-    # checkpoint simply leaves this class unsupported.
-    8: {
-        'electric bicycle', 'electric bike', 'e-bike', 'ebike',
-        'electric_bicycle',
-    },
-    9: {'minibike', 'motorcycle', 'motorbike'},
-    10: {'chair', 'armchair', 'swivel chair', 'seat'},
-    11: {'bench'},
-}
-
-QUERY_CLASS_ALIASES = {
-    'road': {'road', 'street', 'sidewalk', 'path', '道路', '路面'},
-    'building': {'building', 'wall', 'house', '建筑', '墙', '房屋'},
-    'tree': {'tree', 'plant', 'vegetation', '树', '树木', '植物'},
-    'person': {'person', 'people', 'human', 'pedestrian', '人', '行人'},
-    'car': {
-        'car', 'cars', 'automobile', 'vehicle', 'van',
-        '汽车', '轿车', '车辆',
-    },
-    'truck': {'truck', 'trucks', 'lorry', '卡车', '货车'},
-    'bus': {'bus', 'buses', 'coach', '公交车', '巴士'},
-    'bicycle': {
-        'bicycle', 'bicycles', 'bike', 'bikes', 'cycle',
-        '自行车', '单车',
-    },
-    'electric_bicycle': {
-        'electric bicycle', 'electric bicycles', 'electric bike',
-        'electric bikes', 'e-bike', 'e-bikes', 'ebike', 'ebikes',
-        '电动自行车', '电动单车', '电助力自行车', '电助力单车', '电动车',
-    },
-    'motorcycle': {
-        'motorcycle', 'motorcycles', 'motorbike', 'minibike',
-        'scooter', 'electric motorcycle',
-        '摩托车', '电动摩托车', '电摩', '踏板车',
-    },
-    'chair': {'chair', 'chairs', 'seat', 'armchair', '椅子', '座椅'},
-    'bench': {'bench', 'benches', '长椅', '长凳'},
-    'unknown background': {'unknown background'},
-}
-
-COLOR_ALIASES = {
-    'red': {'red', '红', '红色'},
-    'orange': {'orange', '橙', '橙色'},
-    'yellow': {'yellow', '黄', '黄色'},
-    'green': {'green', '绿', '绿色'},
-    'blue': {'blue', '蓝', '蓝色'},
-    'purple': {'purple', 'violet', '紫', '紫色'},
-    'brown': {'brown', '棕', '棕色', '褐色'},
-    'black': {'black', '黑', '黑色'},
-    'white': {'white', '白', '白色'},
-    'gray': {'gray', 'grey', '灰', '灰色'},
-}
+def should_run_inference(now_ns, last_ns, interval_sec):
+    """Return whether inference is due, rebasing after a ROS clock rewind."""
+    now_ns = int(now_ns)
+    interval_ns = max(0, int(float(interval_sec) * 1e9))
+    if last_ns is None or now_ns < int(last_ns):
+        return True, now_ns
+    if now_ns - int(last_ns) < interval_ns:
+        return False, int(last_ns)
+    return True, now_ns
 
 
 def resolve_clip_model_name(model_name, pretrained, available_models=None):
@@ -189,59 +86,6 @@ def convert_image_to_rgb(image, encoding):
             'image_encoding must be one of rgb8, bgr8, rgba8 or bgra8; '
             f'got {encoding!r}.')
     return np.ascontiguousarray(rgb_image)
-
-
-def normalize_label(label):
-    """Normalize model labels and text queries for matching."""
-    return str(label).lower().replace('-', ' ').replace('_', ' ').strip()
-
-
-def _alias_matches(alias, normalized_text, tokens):
-    normalized_alias = normalize_label(alias)
-    if not normalized_alias:
-        return False
-    if re.fullmatch(r'[a-z0-9 ]+', normalized_alias):
-        if ' ' in normalized_alias:
-            return normalized_alias in normalized_text
-        return normalized_alias in tokens
-    return normalized_alias in normalized_text
-
-
-def parse_semantic_query(query, vocab=DEFAULT_CLASSES):
-    """Return ``(class_index, color_name)`` parsed from a text query."""
-    normalized = normalize_label(query)
-    tokens = set(re.findall(r'[a-z0-9]+', normalized))
-
-    color_name = None
-    for canonical_color, aliases in COLOR_ALIASES.items():
-        if any(_alias_matches(alias, normalized, tokens) for alias in aliases):
-            color_name = canonical_color
-            break
-
-    class_index = None
-    best_alias_score = None
-    vocab_lower = [normalize_label(name) for name in vocab]
-    for index, class_name in enumerate(vocab_lower):
-        raw_class_name = str(vocab[index]).lower().strip()
-        aliases = set(QUERY_CLASS_ALIASES.get(raw_class_name, ()))
-        aliases.update(QUERY_CLASS_ALIASES.get(class_name, ()))
-        aliases.add(class_name)
-        for alias in aliases:
-            if not _alias_matches(alias, normalized, tokens):
-                continue
-            normalized_alias = normalize_label(alias)
-            # Prefer the most specific phrase across classes. Otherwise the
-            # shorter "bicycle" alias consumes "electric bicycle" first.
-            score = (
-                len(normalized_alias),
-                len(normalized_alias.split()),
-                -index,
-            )
-            if best_alias_score is None or score > best_alias_score:
-                best_alias_score = score
-                class_index = index
-
-    return class_index, color_name
 
 
 def color_membership_score(rgb, color_name):

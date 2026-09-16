@@ -6,6 +6,7 @@ from semantic_mapping.runtime.ga_bsvm_node import GABsvmNode
 from semantic_mapping.runtime.segformer_core import (
     aggregate_project_probability_tensor,
 )
+from semantic_mapping.runtime import semantic_posterior
 from semantic_mapping.runtime.semantic_posterior import (
     aggregate_project_probabilities,
     posterior_array_to_image,
@@ -100,6 +101,22 @@ def test_fp16_posterior_image_is_atomic_and_keeps_header():
     assert message.encoding == '16FC2'
     assert message.step == 8
     np.testing.assert_allclose(decoded, posterior, atol=5e-4)
+
+
+def test_float32_clip_frame_is_atomic_and_keeps_header():
+    header = Header()
+    header.stamp.sec = 8
+    header.stamp.nanosec = 42
+    header.frame_id = 'camera'
+    frame = np.arange(2 * 3 * 7, dtype=np.float32).reshape(2, 3, 7)
+
+    message = semantic_posterior.float32_array_to_image(frame, header)
+    decoded = semantic_posterior.float32_image_to_array(
+        message, expected_channels=7)
+
+    assert message.header == header
+    assert message.encoding == '32FC7'
+    np.testing.assert_array_equal(decoded, frame)
 
 
 def test_posterior_decoder_rejects_wrong_class_count_and_step():

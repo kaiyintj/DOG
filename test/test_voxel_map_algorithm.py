@@ -27,6 +27,20 @@ def test_repeated_consistent_observations_increase_class_probability():
     assert int(np.argmax(probabilities)) == 2
 
 
+def test_map_revision_advances_after_update_and_prune():
+    voxel_map = VoxelMap(K=2, evidence_decay=1.0)
+    point = np.array([[0.01, 0.01, 0.01]], dtype=np.float32)
+    logits = np.array([[4.0, 0.0]], dtype=np.float32)
+
+    assert voxel_map.revision == 0
+    voxel_map.update(point, np.ones(1), logits, timestamp_sec=1.0)
+    after_update = voxel_map.revision
+    assert after_update == 1
+
+    voxel_map.prune(2.0, stale_ttl_sec=100.0)
+    assert voxel_map.revision == after_update + 1
+
+
 def test_evidence_probabilities_exclude_symmetric_prior():
     voxel_map = VoxelMap(
         voxel_size=0.2,
@@ -84,6 +98,20 @@ def test_uniform_semantics_remain_uncertain_even_with_more_evidence():
     np.testing.assert_allclose(probabilities, np.full(4, 0.25), atol=1e-6)
     assert uncertainty >= 0.7
     assert voxel_map.get_confidence(key) <= 0.3
+
+
+def test_nonfinite_reliability_is_ignored_without_map_contamination():
+    voxel_map = VoxelMap(K=2)
+    point = np.asarray([[0.01, 0.01, 0.01]], dtype=np.float32)
+
+    voxel_map.update(
+        point,
+        np.asarray([np.nan], dtype=np.float32),
+        np.asarray([[4.0, 0.0]], dtype=np.float32),
+        timestamp_sec=1.0,
+    )
+
+    assert voxel_map.voxels == {}
 
 
 def test_open_vocabulary_features_are_normalized_after_fusion():

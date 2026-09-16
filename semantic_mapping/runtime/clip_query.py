@@ -1,14 +1,5 @@
 #!/usr/bin/env python3
-"""
-Publish one text query for the running semantic frontend to encode.
-
-clip_node 使用与图像特征相同的模型、QuickGELU 变体和提示模板编码文本；
-ga_bsvm_node 收到对应特征后在 voxel_map 中搜索目标。
-
-用法:
-    ros2 run semantic_mapping clip_query "brown rock"
-    ros2 run semantic_mapping clip_query "person"
-"""
+"""Publish one query to the selected semantic backend and exit."""
 import sys
 
 import rclpy
@@ -16,21 +7,27 @@ from rclpy.node import Node
 from std_msgs.msg import String
 
 
-class ClipQuery(Node):
-    """Publish one text query and expose completion to the main loop."""
+class SemanticQuery(Node):
+    """Wait for GA-BSVM, publish one text query, and expose completion."""
 
     def __init__(self, text):
         """Create the one-shot publisher for ``text``."""
-        super().__init__('clip_query')
+        super().__init__('semantic_query')
         self.pub = self.create_publisher(String, '/text_query', 10)
         msg = String()
         msg.data = text
 
-        self.timer = self.create_timer(0.5, lambda: self._send_once(msg))
+        self.timer = self.create_timer(0.1, lambda: self._send_once(msg))
         self.sent = False
+        self.wait_reported = False
 
     def _send_once(self, msg):
         if self.sent:
+            return
+        if self.pub.get_subscription_count() == 0:
+            if not self.wait_reported:
+                self.get_logger().info('等待 GA-BSVM 接收文本查询...')
+                self.wait_reported = True
             return
         self.pub.publish(msg)
         self.get_logger().info(f'文本查询已发布: "{msg.data}"')
@@ -38,14 +35,18 @@ class ClipQuery(Node):
         self.timer.cancel()
 
 
+# Keep imports of the old name working while ``clip_query`` remains a CLI alias.
+ClipQuery = SemanticQuery
+
+
 def main():
     """Publish the command-line text through the canonical query topic."""
     if len(sys.argv) < 2:
-        print('用法: ros2 run semantic_mapping clip_query "<text>"')
+        print('用法: ros2 run semantic_mapping semantic_query "<text>"')
         sys.exit(1)
     text = ' '.join(sys.argv[1:])
     rclpy.init()
-    node = ClipQuery(text)
+    node = SemanticQuery(text)
     try:
         while rclpy.ok() and not node.sent:
             rclpy.spin_once(node)

@@ -31,6 +31,10 @@ SEGFORMER_DISTRIBUTIONS = {
     "tokenizers": "0.20.3",
 }
 SEGFORMER_MODULES = ("transformers", "huggingface_hub", "tokenizers")
+MODEL_REPOSITORIES = {
+    "clip": "models--timm--vit_base_patch32_clip_224.openai",
+    "segformer": "models--nvidia--segformer-b0-finetuned-cityscapes-1024-1024",
+}
 
 
 def _write_distribution(site, name, version):
@@ -62,7 +66,29 @@ def _write_module(site, module_name):
             "VALUE = 1\n", encoding="utf-8")
 
 
-def _fake_environment(tmp_path, numpy_version="1.26.4"):
+def _write_model_cache(environment, backend):
+    snapshot = (
+        Path(environment["HF_HOME"])
+        / "hub"
+        / MODEL_REPOSITORIES[backend]
+        / "snapshots"
+        / "fake"
+    )
+    snapshot.mkdir(parents=True)
+    filenames = (
+        ("open_clip_model.safetensors",)
+        if backend == "clip"
+        else ("config.json", "preprocessor_config.json", "model.safetensors")
+    )
+    for filename in filenames:
+        (snapshot / filename).write_bytes(b"fake model artifact")
+
+
+def _fake_environment(
+    tmp_path,
+    numpy_version="1.26.4",
+    include_segformer=False,
+):
     site = tmp_path / "site"
     binaries = tmp_path / "bin"
     site.mkdir()
@@ -92,7 +118,12 @@ def _fake_environment(tmp_path, numpy_version="1.26.4"):
     )
 
     ros2 = binaries / "ros2"
-    ros2.write_text(
+    segformer_entry = (
+        "    echo 'semantic_mapping segformer_node'\n"
+        if include_segformer
+        else ""
+    )
+    ros2_script = (
         "#!/bin/sh\n"
         "if [ \"$2\" = prefix ]; then\n"
         "  echo \"/fake/$3\"\n"
@@ -101,15 +132,21 @@ def _fake_environment(tmp_path, numpy_version="1.26.4"):
         "    echo 'fast_lio fastlio_mapping'\n"
         "  elif [ \"$3\" = semantic_mapping ]; then\n"
         "    echo 'semantic_mapping clip_node'\n"
-        "    echo 'semantic_mapping ga_bsvm_node'\n"
+        + segformer_entry
+        + "    echo 'semantic_mapping ga_bsvm_node'\n"
         "  fi\n"
         "fi\n"
-        "exit 0\n",
+        "exit 0\n"
+    )
+    ros2.write_text(
+        ros2_script,
         encoding="utf-8",
     )
     ros2.chmod(0o755)
     environment = dict(os.environ)
     environment["PYTHONPATH"] = str(site)
+    environment["HF_HOME"] = str(tmp_path / "hf")
+    environment["HF_HUB_CACHE"] = str(tmp_path / "hf" / "hub")
     environment["PATH"] = "{}:{}".format(
         binaries, environment.get("PATH", ""))
     return environment, ros2
@@ -128,6 +165,7 @@ def _run_check(environment, backend="clip"):
 def test_cli_accepts_one_complete_runtime(tmp_path):
     """Report ready through the command interface when every probe passes."""
     environment, unused_ros2 = _fake_environment(tmp_path)
+    _write_model_cache(environment, "clip")
 
     completed = _run_check(environment)
 
@@ -135,6 +173,7 @@ def test_cli_accepts_one_complete_runtime(tmp_path):
     assert "DIST_NUMPY=PASS" in completed.stdout
     assert "IMPORT_LIVOX_ROS_DRIVER2_MSG=PASS" in completed.stdout
     assert "CV_BRIDGE_RGB_ROUNDTRIP=PASS" in completed.stdout
+    assert "MODEL_CACHE_CLIP=PASS" in completed.stdout
     assert "ROS_PACKAGE_SEMANTIC_MAPPING=PASS" in completed.stdout
     assert "ROS_EXECUTABLE_FAST_LIO_FASTLIO_MAPPING=PASS" in completed.stdout
     assert "ROS_EXECUTABLE_SEMANTIC_MAPPING_CLIP_NODE=PASS" in completed.stdout
@@ -143,7 +182,9 @@ def test_cli_accepts_one_complete_runtime(tmp_path):
 
 def test_cli_accepts_segformer_runtime(tmp_path):
     """Use the same interface with the SegFormer dependency adapter."""
-    environment, unused_ros2 = _fake_environment(tmp_path)
+    environment, unused_ros2 = _fake_environment(
+        tmp_path, include_segformer=True)
+    _write_model_cache(environment, "segformer")
     site = Path(environment["PYTHONPATH"])
     for name, version in SEGFORMER_DISTRIBUTIONS.items():
         _write_distribution(site, name, version)
@@ -156,7 +197,42 @@ def test_cli_accepts_segformer_runtime(tmp_path):
     assert "BACKEND=segformer" in completed.stdout
     assert "DIST_TRANSFORMERS=PASS" in completed.stdout
     assert "IMPORT_TRANSFORMERS=PASS" in completed.stdout
+    assert "MODEL_CACHE_SEGFORMER=PASS" in completed.stdout
+    assert (
+        "ROS_EXECUTABLE_SEMANTIC_MAPPING_SEGFORMER_NODE=PASS"
+        in completed.stdout
+    )
     assert "OVERALL=B_DISK_RUNTIME_READY" in completed.stdout
+
+
+def test_cli_rejects_segformer_without_selected_frontend(tmp_path):
+    """Do not substitute the CLIP executable for a SegFormer launch."""
+    environment, unused_ros2 = _fake_environment(tmp_path)
+    _write_model_cache(environment, "segformer")
+    for name, version in SEGFORMER_DISTRIBUTIONS.items():
+        _write_distribution(Path(environment["PYTHONPATH"]), name, version)
+    for module_name in SEGFORMER_MODULES:
+        _write_module(Path(environment["PYTHONPATH"]), module_name)
+
+    completed = _run_check(environment, backend="segformer")
+
+    assert completed.returncode == 1
+    assert (
+        "ROS_EXECUTABLE_SEMANTIC_MAPPING_SEGFORMER_NODE=FAIL"
+        in completed.stdout
+    )
+    assert "OVERALL=B_DISK_RUNTIME_NOT_READY" in completed.stdout
+
+
+def test_cli_rejects_missing_selected_model_cache(tmp_path):
+    """A complete Python overlay without offline weights is not ready."""
+    environment, unused_ros2 = _fake_environment(tmp_path)
+
+    completed = _run_check(environment)
+
+    assert completed.returncode == 1
+    assert "MODEL_CACHE_CLIP=FAIL" in completed.stdout
+    assert "OVERALL=B_DISK_RUNTIME_NOT_READY" in completed.stdout
 
 
 def test_cli_explains_version_and_overlay_failures(tmp_path):

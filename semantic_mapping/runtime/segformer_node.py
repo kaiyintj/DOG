@@ -8,18 +8,25 @@ from cv_bridge import CvBridge
 from rclpy.node import Node
 from rclpy.qos import qos_profile_sensor_data
 from sensor_msgs.msg import CompressedImage, Image
+from std_msgs.msg import String
 
-from semantic_mapping.runtime.semantic_schema import convert_image_to_rgb, normalize_label
+from semantic_mapping.runtime.semantic_schema import (
+    convert_image_to_rgb,
+    normalize_label,
+    should_run_inference,
+)
 from semantic_mapping.runtime.segformer_core import (
-    LABEL_ALIASES,
-    PROJECT_CLASSES,
-    PROJECT_COLORS,
     aggregate_project_probability_tensor,
     build_project_lookup,
     find_supported_project_classes,
     split_model_label,
 )
 from semantic_mapping.runtime.semantic_posterior import posterior_array_to_image
+from semantic_mapping.runtime.semantic_profile import open_profile
+from semantic_mapping.runtime.semantic_profile_ros import (
+    make_semantic_capability,
+    semantic_capability_qos,
+)
 from semantic_mapping.runtime.segformer_training import (
     DEFAULT_MIN_ELECTRIC_BICYCLE_IOU,
     DEFAULT_MIN_ROAD_IOU,
@@ -30,23 +37,32 @@ from semantic_mapping.runtime.segformer_training import (
 )
 
 
-def find_relevant_model_labels(id2label, watched_labels):
-    """Find original model ids whose label terms match watched labels."""
+__all__ = (
+    'SegformerNode', 'build_project_lookup', 'find_supported_project_classes',
+    'find_relevant_model_labels', 'raw_prediction_statistics',
+    'format_raw_statistics', 'convert_image_to_rgb', 'split_model_label',
+    'verify_local_training_checkpoint', 'main',
+)
+
+
+def find_relevant_model_labels(id2label, watched_labels, ontology_profile='outdoor13'):
+    """Find raw ids mapped to watched project classes, or explicitly watched raw labels."""
+    profile = open_profile(ontology_profile, id2label or None)
+    return _watch_label_groups(profile, id2label, watched_labels)
+
+
+def _watch_label_groups(profile, id2label, watched_labels):
+    class_ids = {normalize_label(name): index for index, name in enumerate(profile.classes)}
     result = {}
     for watched_label in watched_labels:
         watched_term = normalize_label(watched_label)
-        watched_terms = {watched_term}
-        if watched_term in PROJECT_CLASSES:
-            project_id = PROJECT_CLASSES.index(watched_term)
-            watched_terms.update(
-                normalize_label(alias)
-                for alias in LABEL_ALIASES.get(project_id, ())
-            )
+        project_id = class_ids.get(watched_term)
         result[watched_label] = sorted(
             (
                 (int(class_id), str(original_label))
                 for class_id, original_label in id2label.items()
-                if watched_terms.intersection(split_model_label(original_label))
+                if (profile.raw_lookup[int(class_id)] == project_id if project_id is not None
+                    else watched_term in split_model_label(original_label))
             ),
             key=lambda item: item[0],
         )
@@ -71,7 +87,7 @@ def _normalized_roi_slices(image_shape, normalized_roi):
     return slice(y0, y1), slice(x0, x1), (x0, y0, x1, y1)
 
 
-def _region_class_statistics(mask, confidence, id2label, top_k, watched_labels):
+def _region_class_statistics(mask, confidence, id2label, top_k, relevant_ids):
     pixel_count = int(mask.size)
     class_count = max(
         max((int(class_id) for class_id in id2label), default=-1) + 1,
@@ -100,7 +116,6 @@ def _region_class_statistics(mask, confidence, id2label, top_k, watched_labels):
     ][:max(1, int(top_k))]
 
     watched = {}
-    relevant_ids = find_relevant_model_labels(id2label, watched_labels)
     for watched_label, matching_labels in relevant_ids.items():
         matching_ids = [class_id for class_id, _ in matching_labels]
         matching_mask = np.isin(mask, matching_ids)
@@ -122,8 +137,14 @@ def raw_prediction_statistics(
     top_k=8,
     watched_labels=(),
     normalized_roi=(0.0, 0.0, 0.0, 0.0),
+    ontology_profile='outdoor13',
 ):
     """Summarize raw model predictions globally and in an optional ROI."""
+    relevant_ids = find_relevant_model_labels(id2label, watched_labels, ontology_profile)
+    return _statistics_for_groups(mask, confidence, id2label, top_k, relevant_ids, normalized_roi)
+
+
+def _statistics_for_groups(mask, confidence, id2label, top_k, relevant_ids, normalized_roi):
     mask = np.asarray(mask)
     confidence = np.asarray(confidence)
     if mask.ndim != 2 or confidence.shape != mask.shape:
@@ -133,7 +154,7 @@ def raw_prediction_statistics(
 
     result = {
         'global': _region_class_statistics(
-            mask, confidence, id2label, top_k, watched_labels),
+            mask, confidence, id2label, top_k, relevant_ids),
         'roi': None,
         'roi_pixels': None,
     }
@@ -145,7 +166,7 @@ def raw_prediction_statistics(
             confidence[rows, columns],
             id2label,
             top_k,
-            watched_labels,
+            relevant_ids,
         )
         result['roi_pixels'] = pixel_bounds
     return result
@@ -193,6 +214,10 @@ def verify_local_training_checkpoint(model_id, training_report):
 class SegformerNode(Node):
     def __init__(self):
         super().__init__('segformer_node')
+        self.declare_parameter('ontology_profile', 'outdoor13')
+        self.profile = open_profile(self.get_parameter('ontology_profile').value)
+        self.declare_parameter(
+            'semantic_capability_topic', '/segformer/semantic_capability')
         self.declare_parameter(
             'model_id', 'nvidia/segformer-b0-finetuned-cityscapes-1024-1024')
         self.declare_parameter('device', 'auto')
@@ -319,14 +344,18 @@ class SegformerNode(Node):
             int(class_id): label
             for class_id, label in self.model.config.id2label.items()
         }
-        self.project_lookup = build_project_lookup(self.id2label)
+        self.profile = open_profile(self.profile.id, self.id2label)
+        self.project_colors = np.asarray(self.profile.colors, dtype=np.uint8)
+        self.project_lookup = np.asarray(self.profile.raw_lookup, dtype=np.uint8)
         self.project_lookup_tensor = self.torch.as_tensor(
             self.project_lookup,
             dtype=self.torch.long,
             device=self.device,
         )
-        self.supported_project_classes = find_supported_project_classes(
-            self.id2label)
+        self.supported_project_classes = tuple(
+            self.profile.classes[index]
+            for index in sorted(self.profile.supported_ids)
+        )
         self.electric_bicycle_training_report = None
         if 'electric_bicycle' in self.supported_project_classes:
             report_path, training_report = load_training_report(self.model_id)
@@ -382,20 +411,25 @@ class SegformerNode(Node):
             Image, self.color_mask_topic, 1)
         self.source_image_pub = self.create_publisher(
             Image, self.source_image_topic, qos_profile_sensor_data)
+        self.semantic_capability_pub = self.create_publisher(
+            String, self.get_parameter('semantic_capability_topic').value,
+            semantic_capability_qos())
+        self.semantic_capability_pub.publish(make_semantic_capability(
+            self.profile, self.model_id, self.id2label))
 
-        relevant_labels = find_relevant_model_labels(
-            self.id2label, self.debug_watch_labels)
+        self.debug_relevant_labels = _watch_label_groups(
+            self.profile, self.id2label, self.debug_watch_labels)
         label_summary = '; '.join(
             f'{label}=['
             + ', '.join(f'{class_id}:{name}' for class_id, name in matches)
             + ']'
-            for label, matches in relevant_labels.items()
+            for label, matches in self.debug_relevant_labels.items()
         )
         self.get_logger().info(
             f'SegFormer original id2label (watched): {label_summary}')
         unsupported_project_classes = [
             class_name
-            for class_name in PROJECT_CLASSES[:-1]
+            for class_name in self.profile.classes[:-1]
             if class_name not in self.supported_project_classes
         ]
         self.get_logger().info(
@@ -423,6 +457,7 @@ class SegformerNode(Node):
             'argmax; the FP16 project posterior stays at decoder resolution.')
         self.get_logger().info(
             f'SegFormer ready: topic={self.image_topic}, '
+            f'profile={self.profile.id}, K={self.profile.K}, '
             f'compressed={self.image_is_compressed}, device={self.device}, '
             f'confidence_threshold={self.confidence_threshold:.2f}, '
             f'posterior_temperature={self.posterior_temperature:.4f}, '
@@ -430,12 +465,11 @@ class SegformerNode(Node):
 
     def image_callback(self, msg):
         now_ns = self.get_clock().now().nanoseconds
-        if (
-            self.last_inference_ns is not None
-            and now_ns - self.last_inference_ns < int(self.interval * 1e9)
-        ):
+        due, baseline_ns = should_run_inference(
+            now_ns, self.last_inference_ns, self.interval)
+        if not due:
             return
-        self.last_inference_ns = now_ns
+        self.last_inference_ns = baseline_ns
 
         try:
             if self.image_is_compressed:
@@ -470,7 +504,7 @@ class SegformerNode(Node):
                     aggregate_project_probability_tensor(
                         raw_native_probabilities,
                         self.project_lookup_tensor,
-                        len(PROJECT_CLASSES),
+                        self.profile.K,
                     )
                 )
 
@@ -497,8 +531,8 @@ class SegformerNode(Node):
             confidence_map = raw_confidence_map
             project_mask = self.project_lookup[raw_mask]
             project_mask[confidence_map < self.confidence_threshold] = (
-                len(PROJECT_CLASSES) - 1)
-            color_mask = PROJECT_COLORS[project_mask]
+                self.profile.unknown_id)
+            color_mask = self.project_colors[project_mask]
 
             posterior = project_native_probabilities[0].permute(
                 1, 2, 0).cpu().numpy()
@@ -530,11 +564,11 @@ class SegformerNode(Node):
             self.processed_count += 1
             if self.processed_count % self.log_every_n == 0:
                 fractions = np.bincount(
-                    project_mask.ravel(), minlength=len(PROJECT_CLASSES))
+                    project_mask.ravel(), minlength=self.profile.K)
                 fractions = fractions / max(project_mask.size, 1)
                 summary = ', '.join(
                     f'{name}={fraction:.1%}'
-                    for name, fraction in zip(PROJECT_CLASSES, fractions)
+                    for name, fraction in zip(self.profile.classes, fractions)
                 )
                 self.get_logger().info(
                     f'SegFormer frame {self.processed_count}: '
@@ -543,12 +577,12 @@ class SegformerNode(Node):
                     f'low_confidence={np.mean(confidence_map < self.confidence_threshold):.1%}, '
                     f'{summary}')
                 if self.debug_log_raw_predictions:
-                    raw_statistics = raw_prediction_statistics(
+                    raw_statistics = _statistics_for_groups(
                         raw_mask,
                         raw_confidence_map,
                         self.id2label,
                         top_k=self.debug_raw_top_k,
-                        watched_labels=self.debug_watch_labels,
+                        relevant_ids=self.debug_relevant_labels,
                         normalized_roi=self.debug_roi,
                     )
                     self.get_logger().info(

@@ -12,8 +12,8 @@ clip_node:
     image_topic: "/d435i/image_raw"
     image_is_compressed: false
     image_encoding: "rgb8"
-    clip_logits_topic: "/clip_logits"
-    clip_features_topic: "/clip_features"
+    clip_frame_topic: "/clip/frame"
+    clip_source_image_topic: "/clip/source_image"
     text_query_topic: "/text_query"
     query_feature_topic: "/query_feature"
 
@@ -66,8 +66,8 @@ ga_bsvm_node:
     projection_calibration_verified: true
     imu_topic: "/imu/data"
     semantic_backend: "clip"
-    clip_logits_topic: "/clip_logits"
-    clip_features_topic: "/clip_features"
+    clip_frame_topic: "/clip/frame"
+    clip_source_image_topic: "/clip/source_image"
     segformer_class_mask_topic: "/segformer/class_mask"
     segformer_confidence_topic: "/segformer/confidence"
     segformer_use_full_posterior: true
@@ -122,13 +122,11 @@ ga_bsvm_node:
     query_approach_radius_m: 2.6
     query_approach_distance_m: 2.0
     query_approach_min_distance_m: 1.2
-    query_clearance_radius_m: 0.6
+    query_approach_min_confidence: 0.15
     query_require_safe_approach: true
     query_prefer_robot_side: true
     query_require_robot_side: true
-    query_prefer_direct_path: true
     query_same_side_min_cosine: 0.0
-    query_path_clearance_radius_m: 0.65
     query_robot_distance_weight: 0.15
     query_require_robot_pose_for_approach: true
     query_cluster_radius_m: 0.45
@@ -137,6 +135,8 @@ ga_bsvm_node:
     query_cluster_support_weight: 0.08
     query_distance_weight: 0.01
     query_max_candidates: 5000
+    query_fallback_max_attempts: 2
+    query_retry_min_interval_sec: 1.0
     query_class_max_extent_m: [100.0, 100.0, 100.0, 1.5, 5.0, 9.0, 14.0, 3.0, 3.5, 3.5, 2.0, 4.0, 100.0]
     cost_map_size_m: 50.0
     costmap_min_confidence: 0.15

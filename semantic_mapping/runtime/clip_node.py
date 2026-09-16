@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 import threading
 
+import numpy as np
 import rclpy
 from rclpy.callback_groups import MutuallyExclusiveCallbackGroup
 from rclpy.executors import ExternalShutdownException, MultiThreadedExecutor
@@ -17,7 +18,9 @@ from semantic_mapping.runtime.semantic_schema import (
     DEFAULT_CLASSES,
     convert_image_to_rgb,
     resolve_clip_model_name,
+    should_run_inference,
 )
+from semantic_mapping.runtime.semantic_posterior import float32_array_to_image
 
 
 class ClipNode(Node):
@@ -40,8 +43,8 @@ class ClipNode(Node):
         self.declare_parameter('image_topic', '/camera/color/image_raw/compressed')
         self.declare_parameter('image_is_compressed', True)
         self.declare_parameter('image_encoding', 'rgb8')
-        self.declare_parameter('clip_logits_topic', '/clip_logits')
-        self.declare_parameter('clip_features_topic', '/clip_features')
+        self.declare_parameter('clip_frame_topic', '/clip/frame')
+        self.declare_parameter('clip_source_image_topic', '/clip/source_image')
         self.declare_parameter('text_query_topic', '/text_query')
         self.declare_parameter('query_feature_topic', '/query_feature')
 
@@ -63,8 +66,9 @@ class ClipNode(Node):
         self.image_topic = self.get_parameter('image_topic').value
         self.image_is_compressed = bool(self.get_parameter('image_is_compressed').value)
         self.image_encoding = self.get_parameter('image_encoding').value
-        self.clip_logits_topic = self.get_parameter('clip_logits_topic').value
-        self.clip_features_topic = self.get_parameter('clip_features_topic').value
+        self.clip_frame_topic = self.get_parameter('clip_frame_topic').value
+        self.clip_source_image_topic = self.get_parameter(
+            'clip_source_image_topic').value
         self.text_query_topic = self.get_parameter('text_query_topic').value
         self.query_feature_topic = self.get_parameter('query_feature_topic').value
 
@@ -97,7 +101,7 @@ class ClipNode(Node):
             self.logit_scale = 100.0
 
         self.bridge = CvBridge()
-        self.last_time = self.get_clock().now()
+        self.last_inference_ns = None
 
         image_msg_type = CompressedImage if self.image_is_compressed else Image
         self.image_callback_group = MutuallyExclusiveCallbackGroup()
@@ -110,10 +114,10 @@ class ClipNode(Node):
             callback_group=self.image_callback_group,
         )
 
-        self.pub_logits_grid = self.create_publisher(
-            Float32MultiArray, self.clip_logits_topic, 10)
-        self.pub_feat_grid = self.create_publisher(
-            Float32MultiArray, self.clip_features_topic, 10)
+        self.pub_clip_frame = self.create_publisher(
+            Image, self.clip_frame_topic, qos_profile_sensor_data)
+        self.pub_source_image = self.create_publisher(
+            Image, self.clip_source_image_topic, qos_profile_sensor_data)
         self.sub_query = self.create_subscription(
             String,
             self.text_query_topic,
@@ -155,14 +159,21 @@ class ClipNode(Node):
                 text_feat = self.encode_texts([text])
 
         feat_msg = Float32MultiArray()
+        feat_msg.layout.dim = [MultiArrayDimension(
+            label=f'query:{text}',
+            size=int(text_feat.shape[-1]),
+            stride=int(text_feat.shape[-1]),
+        )]
         feat_msg.data = text_feat.squeeze(0).cpu().numpy().tolist()
         self.pub_query_feat.publish(feat_msg)
 
     def callback(self, msg):
-        now = self.get_clock().now()
-        if (now - self.last_time).nanoseconds < self.interval * 1e9:
+        now_ns = self.get_clock().now().nanoseconds
+        due, baseline_ns = should_run_inference(
+            now_ns, self.last_inference_ns, self.interval)
+        if not due:
             return
-        self.last_time = now
+        self.last_inference_ns = baseline_ns
 
         try:
             if self.image_is_compressed:
@@ -202,40 +213,18 @@ class ClipNode(Node):
                 ).cpu().numpy()
                 feats_grid = img_feats.cpu().numpy()
 
-            logits_msg = Float32MultiArray()
-            logits_msg.layout.dim = [
-                MultiArrayDimension(
-                    label='rows',
-                    size=self.grid_rows,
-                    stride=self.grid_rows * self.grid_cols * self.K,
-                ),
-                MultiArrayDimension(
-                    label='cols',
-                    size=self.grid_cols,
-                    stride=self.grid_cols * self.K,
-                ),
-                MultiArrayDimension(label='classes', size=self.K, stride=self.K),
-            ]
-            logits_msg.data = logits_grid.flatten().tolist()
-            self.pub_logits_grid.publish(logits_msg)
-
-            feat_dim = feats_grid.shape[1]
-            feat_msg = Float32MultiArray()
-            feat_msg.layout.dim = [
-                MultiArrayDimension(
-                    label='rows',
-                    size=self.grid_rows,
-                    stride=self.grid_rows * self.grid_cols * feat_dim,
-                ),
-                MultiArrayDimension(
-                    label='cols',
-                    size=self.grid_cols,
-                    stride=self.grid_cols * feat_dim,
-                ),
-                MultiArrayDimension(label='feat', size=feat_dim, stride=feat_dim),
-            ]
-            feat_msg.data = feats_grid.flatten().tolist()
-            self.pub_feat_grid.publish(feat_msg)
+            clip_frame = np.concatenate(
+                [
+                    logits_grid.reshape(self.grid_rows, self.grid_cols, self.K),
+                    feats_grid.reshape(self.grid_rows, self.grid_cols, -1),
+                ],
+                axis=2,
+            )
+            self.pub_clip_frame.publish(
+                float32_array_to_image(clip_frame, msg.header))
+            source_msg = self.bridge.cv2_to_imgmsg(rgb_img, encoding='rgb8')
+            source_msg.header = msg.header
+            self.pub_source_image.publish(source_msg)
 
         except Exception as e:
             self.get_logger().warn(f'CLIP 推理失败: {e}')

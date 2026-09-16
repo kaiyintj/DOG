@@ -22,6 +22,11 @@ def compute_motion_reliability(
     if angular_norms.shape != acceleration_norms.shape:
         raise ValueError(
             'angular and acceleration samples must have equal length')
+    if (
+        not np.all(np.isfinite(angular_norms))
+        or not np.all(np.isfinite(acceleration_norms))
+    ):
+        raise ValueError('motion samples must be finite')
 
     angular_rms = float(np.sqrt(np.mean(np.square(angular_norms))))
     acceleration_deviation = float(np.sqrt(np.mean(np.square(

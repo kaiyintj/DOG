@@ -4,6 +4,7 @@
 import argparse
 from dataclasses import dataclass
 from importlib import metadata
+import os
 from pathlib import Path
 import re
 import shutil
@@ -35,7 +36,23 @@ BACKEND_IMPORTS = {
 ROS_PACKAGES = ("livox_ros_driver2", "fast_lio", "semantic_mapping")
 ROS_EXECUTABLES = {
     "fast_lio": ("fastlio_mapping",),
-    "semantic_mapping": ("clip_node", "ga_bsvm_node"),
+    "semantic_mapping": ("ga_bsvm_node",),
+}
+BACKEND_EXECUTABLES = {
+    "clip": ("clip_node",),
+    "segformer": ("segformer_node",),
+}
+MODEL_CACHE_REQUIREMENTS = {
+    "clip": {
+        "repository": "timm/vit_base_patch32_clip_224.openai",
+        "required": (),
+        "weights": ("open_clip_model.safetensors", "pytorch_model.bin"),
+    },
+    "segformer": {
+        "repository": "nvidia/segformer-b0-finetuned-cityscapes-1024-1024",
+        "required": ("config.json", "preprocessor_config.json"),
+        "weights": ("model.safetensors", "pytorch_model.bin"),
+    },
 }
 IMPORT_FAILURE_MARKERS = (
     "_ARRAY_API not found",
@@ -247,7 +264,7 @@ def _cv_bridge_rgb_roundtrip_check():
     )
 
 
-def _ros_package_checks():
+def _ros_package_checks(backend):
     ros2 = shutil.which("ros2")
     if ros2 is None:
         return [Check("ROS2_COMMAND", False, "ros2 is not on PATH")]
@@ -283,7 +300,10 @@ def _ros_package_checks():
             for line in executables.stdout.splitlines()
             if len(fields := line.split(maxsplit=1)) == 2
         }
-        for executable in ROS_EXECUTABLES[package]:
+        required_executables = ROS_EXECUTABLES[package]
+        if package == "semantic_mapping":
+            required_executables += BACKEND_EXECUTABLES[backend]
+        for executable in required_executables:
             checks.append(Check(
                 "ROS_EXECUTABLE_{}_{}".format(
                     _status_name(package), _status_name(executable)),
@@ -297,6 +317,51 @@ def _ros_package_checks():
     return checks
 
 
+def _hf_cache_root():
+    explicit_cache = os.environ.get("HF_HUB_CACHE")
+    if explicit_cache:
+        return Path(explicit_cache).expanduser()
+    home = os.environ.get("HF_HOME")
+    if home:
+        return Path(home).expanduser() / "hub"
+    return Path.home() / ".cache" / "huggingface" / "hub"
+
+
+def _model_cache_check(backend):
+    specification = MODEL_CACHE_REQUIREMENTS[backend]
+    repository = specification["repository"]
+    repository_root = (
+        _hf_cache_root()
+        / "models--{}".format(repository.replace("/", "--"))
+    )
+    snapshots_root = repository_root / "snapshots"
+    snapshots = sorted(
+        path for path in snapshots_root.iterdir()
+        if path.is_dir()
+    ) if snapshots_root.is_dir() else []
+    for snapshot in snapshots:
+        missing = [
+            filename for filename in specification["required"]
+            if not (snapshot / filename).is_file()
+        ]
+        weights = [
+            filename for filename in specification["weights"]
+            if (snapshot / filename).is_file()
+        ]
+        if not missing and weights:
+            return Check(
+                "MODEL_CACHE_{}".format(_status_name(backend)),
+                True,
+                "{} ({})".format(snapshot, weights[0]),
+            )
+    return Check(
+        "MODEL_CACHE_{}".format(_status_name(backend)),
+        False,
+        "offline {} weights/config not found under {}".format(
+            backend, repository_root),
+    )
+
+
 def check_runtime(project_root, backend):
     """Return all checks exposed by the runtime readiness interface."""
     project_root = Path(project_root).resolve()
@@ -308,7 +373,8 @@ def check_runtime(project_root, backend):
         for module_name in BASE_IMPORTS + BACKEND_IMPORTS[backend]
     )
     checks.append(_cv_bridge_rgb_roundtrip_check())
-    checks.extend(_ros_package_checks())
+    checks.append(_model_cache_check(backend))
+    checks.extend(_ros_package_checks(backend))
     return checks
 
 

@@ -8,6 +8,63 @@ from sensor_msgs.msg import Image
 
 
 _POSTERIOR_ENCODING = re.compile(r'^16FC([1-9][0-9]*)$')
+_FLOAT32_ENCODING = re.compile(r'^32FC([1-9][0-9]*)$')
+
+
+def float32_array_to_image(values, header):
+    """Encode one finite ``H x W x C`` array as a Header-bearing Image."""
+    array = np.asarray(values, dtype=np.float32)
+    if array.ndim != 3 or array.shape[2] <= 0:
+        raise ValueError('float32 image must have shape (height, width, channels)')
+    if not np.all(np.isfinite(array)):
+        raise ValueError('float32 image values must be finite')
+    height, width, channel_count = array.shape
+    little_endian = np.ascontiguousarray(array.astype('<f4', copy=False))
+    message = Image()
+    message.header = header
+    message.height = int(height)
+    message.width = int(width)
+    message.encoding = f'32FC{channel_count}'
+    message.is_bigendian = 0
+    message.step = int(width * channel_count * np.dtype(np.float32).itemsize)
+    message.data = little_endian.tobytes(order='C')
+    return message
+
+
+def float32_image_to_array(message, expected_channels=None):
+    """Decode and validate one tightly packed Header-bearing float32 array."""
+    match = _FLOAT32_ENCODING.fullmatch(str(message.encoding))
+    if match is None:
+        raise ValueError(
+            f'float32 image encoding must be 32FC<C>, got {message.encoding!r}')
+    channel_count = int(match.group(1))
+    if (
+        expected_channels is not None
+        and channel_count != int(expected_channels)
+    ):
+        raise ValueError(
+            f'float32 image has {channel_count} channels, '
+            f'expected {expected_channels}')
+    height = int(message.height)
+    width = int(message.width)
+    if height <= 0 or width <= 0:
+        raise ValueError('float32 image dimensions must be positive')
+    expected_step = width * channel_count * np.dtype(np.float32).itemsize
+    if int(message.step) != expected_step:
+        raise ValueError(
+            f'float32 image step={message.step}, expected {expected_step}')
+    payload = bytes(message.data)
+    expected_bytes = height * expected_step
+    if len(payload) != expected_bytes:
+        raise ValueError(
+            f'float32 image payload has {len(payload)} bytes, '
+            f'expected {expected_bytes}')
+    dtype = np.dtype('>f4' if int(message.is_bigendian) else '<f4')
+    array = np.frombuffer(payload, dtype=dtype).reshape(
+        height, width, channel_count).astype(np.float32)
+    if not np.all(np.isfinite(array)):
+        raise ValueError('float32 image values must be finite')
+    return array
 
 
 def aggregate_project_probabilities(

@@ -1217,7 +1217,7 @@ start_group \
 
 wait_for_runtime_endpoint fast_lio /Odometry 1 60
 wait_for_runtime_endpoint fast_lio /tf 1 60
-wait_for_runtime_endpoint clip /clip_logits 1 180
+wait_for_runtime_endpoint clip /clip/frame 1 180
 wait_for_runtime_endpoint ga /semantic_cloud 1 60
 
 OUTPUT_BAG="$RUN_DIR/output_bag"
@@ -1235,8 +1235,8 @@ start_group \
     /tf \
     /tf_static \
     /cloud_registered \
-    /clip_logits \
-    /clip_features \
+    /clip/frame \
+    /clip/source_image \
     /text_query \
     /query_feature \
     /semantic_cloud \

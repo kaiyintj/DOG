@@ -18,7 +18,7 @@ import math
 import threading
 from scipy.spatial import cKDTree
 
-from semantic_mapping.runtime.semantic_schema import DEFAULT_CLASSES
+from semantic_mapping.runtime.semantic_profile_ros import load_semantic_contract
 
 
 def stamp_to_seconds(stamp):
@@ -258,12 +258,16 @@ def scale_velocity_command(
 class ActivePerceptionNode(Node):
     def __init__(self):
         super().__init__('active_perception_node')
+        self.declare_parameter('ontology_profile', 'outdoor13')
+        self.profile = load_semantic_contract({
+            'ontology_profile': self.get_parameter('ontology_profile').value,
+        }).profile
 
         # === 核心超参数 ===
         self.declare_parameter('lookahead_dist', 2.0)   # 往前看多远 (米)
         self.declare_parameter('search_radius', 0.5)    # 路径点周围的搜索半径 (米)
         # h_max <= 0 derives the categorical entropy bound from num_classes.
-        self.declare_parameter('num_classes', len(DEFAULT_CLASSES))
+        self.declare_parameter('num_classes', self.profile.K)
         self.declare_parameter('h_max', 0.0)
         self.declare_parameter('min_speed_ratio', 0.3)  # 最低降速到 30%
         self.declare_parameter('unknown_speed_ratio', 0.65)
@@ -305,6 +309,10 @@ class ActivePerceptionNode(Node):
         self.lookahead_dist = self.get_parameter('lookahead_dist').value
         self.search_radius = self.get_parameter('search_radius').value
         self.num_classes = int(self.get_parameter('num_classes').value)
+        load_semantic_contract({
+            'ontology_profile': self.profile.id,
+            'num_classes': self.num_classes,
+        })
         configured_h_max = float(self.get_parameter('h_max').value)
         self.h_max = resolve_h_max(configured_h_max, self.num_classes)
         self.min_speed_ratio = self.get_parameter('min_speed_ratio').value

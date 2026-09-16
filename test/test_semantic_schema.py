@@ -5,6 +5,7 @@ from semantic_mapping.runtime.semantic_schema import (
     color_membership_score,
     parse_semantic_query,
     resolve_clip_model_name,
+    should_run_inference,
 )
 
 
@@ -114,3 +115,14 @@ def test_openai_clip_uses_available_quickgelu_architecture():
         )
         == 'ViT-B-32-quickgelu'
     )
+
+
+def test_inference_throttle_recovers_immediately_after_clock_rewind():
+    due, new_baseline = should_run_inference(
+        now_ns=5_000_000_000,
+        last_ns=10_000_000_000,
+        interval_sec=0.5,
+    )
+
+    assert due is True
+    assert new_baseline == 5_000_000_000

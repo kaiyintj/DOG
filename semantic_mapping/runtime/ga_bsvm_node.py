@@ -1,13 +1,14 @@
 #!/usr/bin/env python3
+import importlib
+import time
+
 import rclpy
-from rclpy._rclpy_pybind11 import RCLError
 from rclpy.duration import Duration
 from rclpy.executors import ExternalShutdownException
 from rclpy.node import Node
 from rclpy.time import Time
 from sensor_msgs.msg import (
     CameraInfo,
-    CompressedImage,
     Image,
     Imu,
     PointCloud2,
@@ -30,14 +31,17 @@ import sensor_msgs_py.point_cloud2 as pc2
 from livox_ros_driver2.msg import CustomMsg
 
 from semantic_mapping.runtime.semantic_schema import (
-    DEFAULT_CLASSES,
-    DEFAULT_CLASS_COLORS,
-    DEFAULT_QUERY_MAX_EXTENTS_M,
-    DEFAULT_SEMANTIC_COSTS,
     color_membership_score,
     parse_semantic_query,
 )
+from semantic_mapping.runtime.semantic_profile import open_profile
+from semantic_mapping.runtime.semantic_profile_ros import (
+    load_semantic_contract,
+    read_semantic_capability,
+    semantic_capability_qos,
+)
 from semantic_mapping.runtime.semantic_posterior import (
+    float32_image_to_array,
     posterior_image_to_array,
     posterior_probabilities_to_logits,
     sample_posterior_bilinear,
@@ -57,8 +61,28 @@ from semantic_mapping.runtime.semantic_projection import (
     scale_camera_matrix as _scale_camera_matrix,
 )
 from semantic_mapping.runtime.voxel_map import VoxelMap
+from semantic_mapping.runtime.query_target import (
+    ApproachPolicy,
+    QueryApproachSnapshot,
+    QueryApproachVoxel,
+    QueryTargetSnapshot,
+    plan_query_target,
+    select_approach_goal,
+)
 # ⚠️ 终于加进来的 QoS 协议包！
 from rclpy.qos import qos_profile_sensor_data, QoSProfile, DurabilityPolicy
+
+
+def _load_rcl_error(import_module=importlib.import_module):
+    """Resolve the private RCLError location across ROS 2 releases."""
+    try:
+        rclpy_impl = import_module('rclpy._rclpy_pybind11')
+    except ModuleNotFoundError:
+        rclpy_impl = import_module('rclpy._rclpy')
+    return rclpy_impl.RCLError
+
+
+RCLError = _load_rcl_error()
 
 
 DYNAMIC_SEMANTIC_CLASS_NAMES = (
@@ -74,6 +98,27 @@ DYNAMIC_SEMANTIC_CLASS_NAMES = (
 # Kept as a public compatibility name for existing users and tests while the
 # implementation lives in the ROS-independent projection module.
 scale_camera_matrix = _scale_camera_matrix
+
+
+def query_goal_yaw(object_pos, goal_pos, robot_position=None, face_target=True):
+    """
+    Choose a goal heading that does not force an avoidable final turn.
+
+    Real-robot profiles keep the historical target-facing heading.  A
+    simulation profile can instead align the heading with the approach path;
+    this is the heading the base is already following and avoids asking the
+    quadruped to rotate in place solely to look at the object.
+    """
+    object_xy = np.asarray(object_pos, dtype=float)[:2]
+    goal_xy = np.asarray(goal_pos, dtype=float)[:2]
+    if face_target or robot_position is None:
+        direction = object_xy - goal_xy
+    else:
+        robot_xy = np.asarray(robot_position, dtype=float)[:2]
+        direction = goal_xy - robot_xy
+    if not np.isfinite(direction).all() or float(np.linalg.norm(direction)) <= 1e-9:
+        return 0.0
+    return float(np.arctan2(direction[1], direction[0]))
 
 
 def normalize_semantic_class_name(name):
@@ -160,6 +205,12 @@ class GABsvmNode(Node):
     def __init__(self):
         super().__init__('ga_bsvm_node')
         self.bridge = CvBridge()
+        self.declare_parameter('ontology_profile', 'outdoor13')
+        self.profile = open_profile(self.get_parameter('ontology_profile').value)
+        self.semantic_capability = None
+        self._accepted_semantic_capability = None
+        self.declare_parameter(
+            'semantic_capability_topic', '/segformer/semantic_capability')
 
         self.declare_parameter('pointcloud_topic', '/velodyne_points')
         self.declare_parameter('pointcloud_type', 'pointcloud2')
@@ -179,8 +230,8 @@ class GABsvmNode(Node):
         self.declare_parameter('projection_calibration_verified', False)
         self.declare_parameter('imu_topic', '/handsfree/imu')
         self.declare_parameter('semantic_backend', 'clip')
-        self.declare_parameter('clip_logits_topic', '/clip_logits')
-        self.declare_parameter('clip_features_topic', '/clip_features')
+        self.declare_parameter('clip_frame_topic', '/clip/frame')
+        self.declare_parameter('clip_source_image_topic', '/clip/source_image')
         self.declare_parameter(
             'segformer_class_mask_topic', '/segformer/class_mask')
         self.declare_parameter(
@@ -206,9 +257,9 @@ class GABsvmNode(Node):
         self.declare_parameter('base_frame', 'base_link')
         self.declare_parameter('grid_rows', 3)
         self.declare_parameter('grid_cols', 4)
-        self.declare_parameter('num_classes', len(DEFAULT_CLASSES))
+        self.declare_parameter('num_classes', self.profile.K)
         self.declare_parameter('feat_dim', 512)
-        self.declare_parameter('vocab', list(DEFAULT_CLASSES))
+        self.declare_parameter('vocab', list(self.profile.classes))
         self.declare_parameter('voxel_size', 0.1)
         self.declare_parameter('evidence_prior', 1.0)
         self.declare_parameter('evidence_strength', 1.0)
@@ -224,7 +275,7 @@ class GABsvmNode(Node):
         self.declare_parameter('voxel_prune_period_sec', 2.0)
         self.declare_parameter('voxel_prune_radius_m', 30.0)
         self.declare_parameter('voxel_max_count', 250000)
-        self.declare_parameter('semantic_costs', list(DEFAULT_SEMANTIC_COSTS))
+        self.declare_parameter('semantic_costs', list(self.profile.semantic_costs))
         self.declare_parameter('query_min_weight_sum', 2.0)
         self.declare_parameter('query_min_class_prob', 0.25)
         self.declare_parameter('query_require_class_argmax', True)
@@ -238,13 +289,12 @@ class GABsvmNode(Node):
         self.declare_parameter('query_approach_radius_m', 1.5)
         self.declare_parameter('query_approach_distance_m', 1.0)
         self.declare_parameter('query_approach_min_distance_m', 0.6)
-        self.declare_parameter('query_clearance_radius_m', 0.35)
+        self.declare_parameter('query_approach_min_confidence', 0.15)
         self.declare_parameter('query_require_safe_approach', True)
         self.declare_parameter('query_prefer_robot_side', True)
         self.declare_parameter('query_require_robot_side', False)
-        self.declare_parameter('query_prefer_direct_path', True)
+        self.declare_parameter('query_face_target', True)
         self.declare_parameter('query_same_side_min_cosine', 0.0)
-        self.declare_parameter('query_path_clearance_radius_m', 0.35)
         self.declare_parameter('query_robot_distance_weight', 0.1)
         self.declare_parameter(
             'query_require_robot_pose_for_approach', False)
@@ -254,8 +304,10 @@ class GABsvmNode(Node):
         self.declare_parameter('query_cluster_support_weight', 0.08)
         self.declare_parameter('query_distance_weight', 0.01)
         self.declare_parameter('query_max_candidates', 5000)
+        self.declare_parameter('query_fallback_max_attempts', 2)
+        self.declare_parameter('query_retry_min_interval_sec', 1.0)
         self.declare_parameter(
-            'query_class_max_extent_m', list(DEFAULT_QUERY_MAX_EXTENTS_M))
+            'query_class_max_extent_m', list(self.profile.query_max_extents))
         self.declare_parameter('cost_map_size_m', 50.0)
         self.declare_parameter('costmap_min_confidence', 0.15)
         self.declare_parameter('costmap_robot_clearance_m', 0.4)
@@ -327,8 +379,9 @@ class GABsvmNode(Node):
         if self.semantic_backend not in ('clip', 'segformer'):
             raise ValueError(
                 'semantic_backend must be either "clip" or "segformer"')
-        self.clip_logits_topic = self.get_parameter('clip_logits_topic').value
-        self.clip_features_topic = self.get_parameter('clip_features_topic').value
+        self.clip_frame_topic = self.get_parameter('clip_frame_topic').value
+        self.clip_source_image_topic = self.get_parameter(
+            'clip_source_image_topic').value
         self.segformer_class_mask_topic = self.get_parameter(
             'segformer_class_mask_topic').value
         self.segformer_confidence_topic = self.get_parameter(
@@ -363,18 +416,15 @@ class GABsvmNode(Node):
         self.num_classes = int(self.get_parameter('num_classes').value)
         self.feat_dim = int(self.get_parameter('feat_dim').value)
         self.vocab = list(self.get_parameter('vocab').value)
-        if len(self.vocab) != self.num_classes:
-            raise ValueError(
-                f'vocab has {len(self.vocab)} classes but num_classes={self.num_classes}')
-        road_ids = resolve_semantic_class_indices(self.vocab, ('road',))
-        self.road_class_idx = next(iter(road_ids), None)
-        if self.road_class_idx is None:
-            self.get_logger().warn(
-                'vocab 中没有 road 类别；安全接近点选择将拒绝发布目标。')
-        self.dynamic_class_ids = resolve_semantic_class_indices(
-            self.vocab,
-            DYNAMIC_SEMANTIC_CLASS_NAMES,
-        )
+        contract = load_semantic_contract({
+            'ontology_profile': self.profile.id,
+            'num_classes': self.num_classes,
+            'vocab': self.vocab,
+            'semantic_costs': self.get_parameter('semantic_costs').value,
+        })
+        self.profile = contract.profile
+        self.traversable_class_ids = self.profile.traversable_ids
+        self.dynamic_class_ids = self.profile.dynamic_ids
         self.voxel_size = float(self.get_parameter('voxel_size').value)
         self.evidence_prior = float(self.get_parameter('evidence_prior').value)
         self.evidence_strength = float(self.get_parameter('evidence_strength').value)
@@ -436,26 +486,24 @@ class GABsvmNode(Node):
             self.get_parameter('query_approach_distance_m').value)
         self.query_approach_min_distance_m = float(
             self.get_parameter('query_approach_min_distance_m').value)
-        self.query_clearance_radius_m = float(
-            self.get_parameter('query_clearance_radius_m').value)
+        self.query_approach_min_confidence = float(np.clip(
+            self.get_parameter('query_approach_min_confidence').value,
+            0.0,
+            1.0,
+        ))
         self.query_require_safe_approach = bool(
             self.get_parameter('query_require_safe_approach').value)
         self.query_prefer_robot_side = bool(
             self.get_parameter('query_prefer_robot_side').value)
         self.query_require_robot_side = bool(
             self.get_parameter('query_require_robot_side').value)
-        self.query_prefer_direct_path = bool(
-            self.get_parameter('query_prefer_direct_path').value)
+        self.query_face_target = bool(
+            self.get_parameter('query_face_target').value)
         self.query_same_side_min_cosine = float(np.clip(
             self.get_parameter('query_same_side_min_cosine').value,
             -1.0,
             1.0,
         ))
-        self.query_path_clearance_radius_m = max(
-            0.0,
-            float(self.get_parameter(
-                'query_path_clearance_radius_m').value),
-        )
         self.query_robot_distance_weight = max(
             0.0,
             float(self.get_parameter('query_robot_distance_weight').value),
@@ -474,13 +522,19 @@ class GABsvmNode(Node):
         self.query_distance_weight = float(
             self.get_parameter('query_distance_weight').value)
         self.query_max_candidates = int(self.get_parameter('query_max_candidates').value)
+        self.query_fallback_max_attempts = max(
+            1,
+            int(self.get_parameter('query_fallback_max_attempts').value),
+        )
+        self.query_retry_min_interval_sec = max(
+            0.0,
+            float(self.get_parameter('query_retry_min_interval_sec').value),
+        )
         self.query_class_max_extent_m = list(
             self.get_parameter('query_class_max_extent_m').value)
         if len(self.query_class_max_extent_m) != self.num_classes:
-            self.get_logger().warn(
-                'query_class_max_extent_m length does not match num_classes; '
-                'class extent filtering will use an unrestricted fallback.')
-            self.query_class_max_extent_m = [100.0] * self.num_classes
+            raise ValueError(
+                'query_class_max_extent_m length must match num_classes')
         self.cost_map_size_m = float(self.get_parameter('cost_map_size_m').value)
         self.costmap_min_confidence = float(
             self.get_parameter('costmap_min_confidence').value)
@@ -589,11 +643,8 @@ class GABsvmNode(Node):
                 qos_profile_sensor_data,
             )
 
-        self.logits_grid = None
-        self.feats_grid = None
-        self.clip_logits_sub = None
-        self.clip_features_sub = None
-        self.img_sub = None
+        self.clip_frame_sub = None
+        self.clip_source_image_sub = None
         self.segformer_mask_sub = None
         self.segformer_confidence_sub = None
         self.segformer_posterior_sub = None
@@ -616,31 +667,28 @@ class GABsvmNode(Node):
             qos_profile=qos_profile_sensor_data,
         )
         if self.semantic_backend == 'clip':
-            self.clip_logits_sub = self.create_subscription(
-                Float32MultiArray,
-                self.clip_logits_topic,
-                self.logits_callback,
-                10,
-            )
-            self.clip_features_sub = self.create_subscription(
-                Float32MultiArray,
-                self.clip_features_topic,
-                self.features_callback,
-                10,
-            )
-            image_msg_type = CompressedImage if self.image_is_compressed else Image
-            self.img_sub = message_filters.Subscriber(
+            self.clip_frame_sub = message_filters.Subscriber(
                 self,
-                image_msg_type,
-                self.image_topic,
+                Image,
+                self.clip_frame_topic,
+                qos_profile=qos_profile_sensor_data,
+            )
+            self.clip_source_image_sub = message_filters.Subscriber(
+                self,
+                Image,
+                self.clip_source_image_topic,
                 qos_profile=qos_profile_sensor_data,
             )
             self.ts = message_filters.ApproximateTimeSynchronizer(
-                [self.pc_sub, self.img_sub],
+                [
+                    self.pc_sub,
+                    self.clip_frame_sub,
+                    self.clip_source_image_sub,
+                ],
                 queue_size=self.sync_queue_size,
                 slop=self.sync_slop,
             )
-            self.ts.registerCallback(self.sync_callback)
+            self.ts.registerCallback(self.clip_sync_callback)
         else:
             self.segformer_source_image_sub = message_filters.Subscriber(
                 self,
@@ -702,7 +750,7 @@ class GABsvmNode(Node):
             max_total_evidence=self.max_total_evidence,
             max_observation_weight=self.max_observation_weight,
             uncertainty_entropy_weight=self.uncertainty_entropy_weight,
-            class_colors=DEFAULT_CLASS_COLORS,
+            class_colors=self.profile.colors,
         )
         self.get_logger().info(
             f'Dirichlet VoxelMap 已创建，网格精度: {self.voxel_size:.3f}m')
@@ -741,22 +789,9 @@ class GABsvmNode(Node):
                 map_qos,
             )
 
-        semantic_costs = list(self.get_parameter('semantic_costs').value)
-        if len(semantic_costs) != self.num_classes:
-            self.get_logger().warn(
-                'semantic_costs 长度 '
-                f'{len(semantic_costs)} 与 num_classes={self.num_classes} '
-                '不一致，使用默认规则。')
-            semantic_costs = [100] * self.num_classes
-            if self.road_class_idx is not None:
-                semantic_costs[self.road_class_idx] = 0
-            unknown_ids = resolve_semantic_class_indices(
-                self.vocab,
-                ('unknown background',),
-            )
-            for unknown_id in unknown_ids:
-                semantic_costs[unknown_id] = -1
-        self.semantic_cost_dict = {idx: int(cost) for idx, cost in enumerate(semantic_costs)}
+        self.semantic_cost_dict = {
+            idx: int(cost) for idx, cost in enumerate(contract.semantic_costs)
+        }
 
         # 固定尺寸 50m x 50m，避免 StaticLayer 频繁 resizeMap 拖死 Nav2
         self.cost_map_origin_x = -self.cost_map_size_m / 2.0
@@ -792,6 +827,13 @@ class GABsvmNode(Node):
         self.last_query_text = ''
         self.last_query_class_idx = None
         self.last_query_color = None
+        self.query_retry_pending = False
+        self.last_query_feature = None
+        self.received_query_feature_text = ''
+        self.received_query_feature = None
+        self._last_query_retry_map_revision = None
+        self._last_query_retry_time_sec = None
+        self.latest_fused_observation_ns = None
         self.get_logger().info(
             'GA-BSVM 中枢已启动: '
             f'backend={self.semantic_backend}, '
@@ -800,6 +842,12 @@ class GABsvmNode(Node):
             f'image={self.image_topic} compressed={self.image_is_compressed}, '
             f'imu={self.imu_topic}, frames={self.odom_frame}->{self.base_frame}')
         if self.semantic_backend == 'segformer':
+            self.semantic_capability_sub = self.create_subscription(
+                String,
+                self.get_parameter('semantic_capability_topic').value,
+                self.semantic_capability_callback,
+                semantic_capability_qos(),
+            )
             if self.segformer_use_full_posterior:
                 self.get_logger().info(
                     'SegFormer fusion input: full project posterior '
@@ -814,6 +862,32 @@ class GABsvmNode(Node):
                 'LiDAR-相机投影标定尚未标记为已验证；允许生成调试语义图，'
                 '但不会发布 /query_target_pose 或 /goal_pose。')
 
+    def semantic_capability_callback(self, message):
+        """Accept one checkpoint contract for this map's entire lifetime."""
+        try:
+            capability = read_semantic_capability(message, self.profile)
+            if (
+                self._accepted_semantic_capability is not None
+                and capability != self._accepted_semantic_capability
+            ):
+                raise ValueError('checkpoint changed; restart the semantic run')
+        except ValueError as exc:
+            self.semantic_capability = None
+            self.query_retry_pending = False
+            self.last_query_feature = None
+            self.pending_tf_frames.clear()
+            self.get_logger().warn(f'SegFormer capability rejected: {exc}')
+            return
+        self.semantic_capability = capability
+        self._accepted_semantic_capability = capability
+        supported = [
+            capability.profile.classes[index]
+            for index in sorted(capability.profile.supported_ids)
+        ]
+        self.get_logger().info(
+            f'SegFormer capability ready: profile={self.profile.id}, '
+            f'checkpoint={capability.checkpoint_id}, supported={supported}')
+
     def _float_list_param(self, name, expected_len):
         values = list(self.get_parameter(name).value)
         if len(values) != expected_len:
@@ -824,16 +898,24 @@ class GABsvmNode(Node):
         stamp_ns = msg.header.stamp.sec * 1_000_000_000 + msg.header.stamp.nanosec
         if stamp_ns == 0:
             stamp_ns = self.get_clock().now().nanoseconds
-        angular_norm = np.linalg.norm([
+        angular_values = np.asarray([
             msg.angular_velocity.x,
             msg.angular_velocity.y,
             msg.angular_velocity.z,
-        ])
-        acceleration_norm = self.imu_acceleration_scale * np.linalg.norm([
+        ], dtype=np.float64)
+        acceleration_values = np.asarray([
             msg.linear_acceleration.x,
             msg.linear_acceleration.y,
             msg.linear_acceleration.z,
-        ])
+        ], dtype=np.float64)
+        if (
+            not np.all(np.isfinite(angular_values))
+            or not np.all(np.isfinite(acceleration_values))
+        ):
+            return
+        angular_norm = np.linalg.norm(angular_values)
+        acceleration_norm = (
+            self.imu_acceleration_scale * np.linalg.norm(acceleration_values))
         self.imu_buffer.append((stamp_ns, angular_norm, acceleration_norm))
 
     def camera_info_callback(self, msg):
@@ -871,30 +953,6 @@ class GABsvmNode(Node):
                 f'fx={self.K[0, 0]:.3f}, fy={self.K[1, 1]:.3f}, '
                 f'cx={self.K[0, 2]:.3f}, cy={self.K[1, 2]:.3f}')
 
-    # 🗡️ 刺客2修复：加入维度校验报警
-    def logits_callback(self, msg):
-        data = np.array(msg.data, dtype=np.float32)
-        expected = self.grid_rows * self.grid_cols * self.num_classes
-        if data.size == expected:
-            self.logits_grid = data.reshape(
-                self.grid_rows,
-                self.grid_cols,
-                self.num_classes,
-            )
-        else:
-            self.get_logger().warn(
-                '⚠️ Logits 维度不匹配被抛弃！'
-                f'收到: {data.size}, 期望: {expected} '
-                f'(请检查查询词数量是否为 {self.num_classes})')
-
-    def features_callback(self, msg):
-        data = np.array(msg.data, dtype=np.float32)
-        expected = self.grid_rows * self.grid_cols * self.feat_dim
-        if data.size == expected:
-            self.feats_grid = data.reshape(self.grid_rows, self.grid_cols, self.feat_dim)
-        else:
-            self.get_logger().warn(f'⚠️ 特征 维度不匹配被抛弃！收到: {data.size}, 期望: {expected}')
-
     def compute_motion_reliability(self, stamp):
         """Estimate image/point reliability from time-aligned body motion."""
         if not self.imu_buffer:
@@ -918,14 +976,17 @@ class GABsvmNode(Node):
                 'IMU 时间对齐已恢复，重新使用运动可靠度估计。')
             self.imu_missing_warned = False
 
-        return compute_motion_reliability_factors(
-            [sample[1] for sample in samples],
-            [sample[2] for sample in samples],
-            self.motion_angular_scale,
-            self.motion_accel_scale,
-            self.imu_gravity,
-            self.motion_min_reliability,
-        )
+        try:
+            return compute_motion_reliability_factors(
+                [sample[1] for sample in samples],
+                [sample[2] for sample in samples],
+                self.motion_angular_scale,
+                self.motion_accel_scale,
+                self.imu_gravity,
+                self.motion_min_reliability,
+            )
+        except ValueError as exc:
+            return self._missing_imu_motion_reliability(str(exc))
 
     def _missing_imu_motion_reliability(self, reason):
         """Return conservative reliability when motion evidence is missing."""
@@ -971,6 +1032,29 @@ class GABsvmNode(Node):
         if not self.last_query_text:
             self.get_logger().warn('收到空查询，忽略。')
             return
+        self.query_retry_pending = False
+        self.last_query_feature = None
+        self._last_query_retry_map_revision = None
+        self._last_query_retry_time_sec = None
+        if self.semantic_backend == 'segformer':
+            profile = (
+                self.semantic_capability.profile
+                if self.semantic_capability is not None else self.profile
+            )
+            decision = profile.resolve_query(self.last_query_text)
+            self.last_query_class_idx = decision.class_id
+            self.last_query_color = decision.color
+            if not decision.accepted:
+                self.get_logger().warn(
+                    f'SegFormer query rejected ({decision.status.value}): '
+                    f'"{self.last_query_text}"')
+                return
+            self.query_retry_pending = True
+            self.get_logger().info(
+                f'SegFormer query accepted: class={decision.class_name}, '
+                f'color={decision.color or "none"}')
+            self.query_class_cb(decision.class_id, decision.color)
+            return
         (
             self.last_query_class_idx,
             self.last_query_color,
@@ -983,19 +1067,16 @@ class GABsvmNode(Node):
         self.get_logger().info(
             f'解析查询: query="{self.last_query_text}", '
             f'class={parsed_class}, color={self.last_query_color or "none"}')
-        if self.semantic_backend != 'segformer':
+        self.query_retry_pending = True
+        self.last_query_feature = None
+        if self.semantic_backend == 'clip':
+            if (
+                self.received_query_feature is not None
+                and self.received_query_feature_text == self.last_query_text
+            ):
+                self.last_query_feature = self.received_query_feature.copy()
+                self._try_clip_query(self.last_query_feature)
             return
-
-        query_class_idx = self.last_query_class_idx
-        if query_class_idx is None:
-            self.get_logger().warn(
-                f'SegFormer 后端仅支持闭集类别 {self.vocab}，'
-                f'无法解析 query="{self.last_query_text}"。')
-            return
-        if query_class_idx == self.num_classes - 1:
-            self.get_logger().warn('unknown background 不能作为导航目标。')
-            return
-        self.query_class_cb(query_class_idx, self.last_query_color)
 
     def get_query_class_index(self):
         if not self.last_query_text:
@@ -1005,6 +1086,42 @@ class GABsvmNode(Node):
         self.last_query_class_idx = query_class_idx
         self.last_query_color = query_color
         return query_class_idx
+
+    def _query_retry_time_sec(self):
+        """Read the active ROS clock, with a test-only wall-clock fallback."""
+        try:
+            return self.get_clock().now().nanoseconds / 1e9
+        except (AttributeError, TypeError, ValueError):
+            return time.monotonic()
+
+    def _query_map_revision(self):
+        """Return the map revision when the active map exposes one."""
+        voxel_map = getattr(self, 'voxel_map', None)
+        revision = getattr(voxel_map, 'revision', None)
+        if revision is None:
+            return None
+        try:
+            return int(revision)
+        except (TypeError, ValueError):
+            return None
+
+    def _record_query_attempt(self):
+        """Remember the map state and time used by the latest query attempt."""
+        self._last_query_retry_map_revision = self._query_map_revision()
+        self._last_query_retry_time_sec = self._query_retry_time_sec()
+
+    def _query_retry_allowed(self):
+        """Gate retries on a changed map revision and a minimum interval."""
+        last_time = getattr(self, '_last_query_retry_time_sec', None)
+        if last_time is None:
+            return True
+        current_revision = self._query_map_revision()
+        last_revision = getattr(self, '_last_query_retry_map_revision', None)
+        if current_revision is not None and current_revision == last_revision:
+            return False
+        elapsed = self._query_retry_time_sec() - last_time
+        return elapsed < 0.0 or elapsed >= getattr(
+            self, 'query_retry_min_interval_sec', 1.0)
 
     def get_robot_position(self):
         try:
@@ -1074,6 +1191,7 @@ class GABsvmNode(Node):
             'max_cluster_color_score': 0.0,
             'max_cluster_color_support_ratio': 0.0,
         }
+        self._last_query_clusters = []
         if not candidates:
             return None
 
@@ -1116,6 +1234,7 @@ class GABsvmNode(Node):
         robot_position = self.get_robot_position()
         best_cluster = None
         best_utility = -float('inf')
+        ranked_clusters = []
         for indices in clusters:
             cluster = [candidates[index] for index in indices]
             total_evidence = sum(item['evidence'] for item in cluster)
@@ -1206,227 +1325,202 @@ class GABsvmNode(Node):
                 + self.query_cluster_support_weight * support
                 - self.query_distance_weight * distance
             )
+            representative = max(cluster, key=lambda item: item['score'])
+            cluster_result = {
+                'key': representative['key'],
+                'pos': centroid.astype(np.float32),
+                'score': selection_score,
+                'semantic_score': semantic_score,
+                'similarity': max(item['similarity'] for item in cluster),
+                'class_probability': max(
+                    item['class_probability'] for item in cluster),
+                'color_score': cluster_color_score,
+                'color_support_ratio': color_support_ratio,
+                'color_rgb': mean_color_rgb,
+                'voxel_count': len(cluster),
+                'evidence': total_evidence,
+                'utility': utility,
+            }
+            ranked_clusters.append(cluster_result)
             if utility > best_utility:
                 best_utility = utility
-                representative = max(cluster, key=lambda item: item['score'])
-                best_cluster = {
-                    'key': representative['key'],
-                    'pos': centroid.astype(np.float32),
-                    'score': selection_score,
-                    'semantic_score': semantic_score,
-                    'similarity': max(item['similarity'] for item in cluster),
-                    'class_probability': max(
-                        item['class_probability'] for item in cluster),
-                    'color_score': cluster_color_score,
-                    'color_support_ratio': color_support_ratio,
-                    'color_rgb': mean_color_rgb,
-                    'voxel_count': len(cluster),
-                    'evidence': total_evidence,
-                    'utility': utility,
-                }
+                best_cluster = cluster_result
+        ranked_clusters.sort(key=lambda item: item['utility'], reverse=True)
+        self._last_query_clusters = ranked_clusters
         return best_cluster
 
-    @staticmethod
-    def _segment_has_clearance(
-        start,
-        end,
-        obstacle_tree,
-        clearance_radius,
-        sample_step,
-    ):
-        """Return whether a straight segment stays clear of semantic obstacles."""
-        if obstacle_tree is None or clearance_radius <= 0.0:
-            return True
-        start = np.asarray(start, dtype=np.float64)[:2]
-        end = np.asarray(end, dtype=np.float64)[:2]
-        distance = float(np.linalg.norm(end - start))
-        if distance <= 1e-9:
-            samples = start.reshape(1, 2)
-        else:
-            step = max(float(sample_step), 0.02)
-            sample_count = max(2, int(np.ceil(distance / step)) + 1)
-            fractions = np.linspace(0.0, 1.0, sample_count)[:, np.newaxis]
-            samples = start + fractions * (end - start)
-        nearest_distances, _ = obstacle_tree.query(samples, k=1)
-        return bool(np.all(
-            np.asarray(nearest_distances) >= float(clearance_radius)))
-
-    def find_approach_goal(self, object_pos, query_class_idx):
-        """Find a supported, robot-side road voxel with a clear approach."""
-        self._last_approach_was_safe = False
-        is_traversable_query = (
-            query_class_idx is not None
-            and self.semantic_cost_dict.get(query_class_idx, 100) < 100
-        )
-        if is_traversable_query:
-            key = self.voxel_map.get_voxel_indices(object_pos)
-            self._last_approach_was_safe = True
-            return key, object_pos
-
-        road_candidates = []
-        obstacle_positions = []
+    def _build_query_approach_snapshot(self, object_positions=()):
+        """Adapt the mutable voxel map into one read-only approach snapshot."""
+        diagnostics = {
+            'low_weight_rejected': 0,
+            'non_traversable_rejected': 0,
+            'low_confidence_rejected': 0,
+        }
+        traversable_voxels = []
+        centers = tuple(np.asarray(pos)[:2] for pos in object_positions)
+        traversable_class_ids = getattr(self, 'traversable_class_ids', ())
         for key, voxel in self.voxel_map.voxels.items():
+            if centers and not any(
+                self.query_approach_min_distance_m
+                <= float(np.linalg.norm(voxel['pos'][:2] - center))
+                <= self.query_approach_radius_m
+                for center in centers
+            ):
+                continue
             if voxel['weight_sum'] < self.query_min_weight_sum:
+                diagnostics['low_weight_rejected'] += 1
                 continue
             probabilities = self.voxel_map.get_probabilities(key)
             class_index = int(np.argmax(probabilities))
-            position = voxel['pos']
-            if self.semantic_cost_dict.get(class_index, -1) >= 100:
-                obstacle_positions.append(position[:2])
-            if (
-                self.road_class_idx is None
-                or class_index != self.road_class_idx
-            ):
+            if class_index not in traversable_class_ids:
+                diagnostics['non_traversable_rejected'] += 1
                 continue
-            distance_to_object = float(np.linalg.norm(position[:2] - object_pos[:2]))
-            if not (
-                self.query_approach_min_distance_m
-                <= distance_to_object
-                <= self.query_approach_radius_m
-            ):
+            confidence = self.voxel_map.get_confidence(key)
+            if confidence < self.query_approach_min_confidence:
+                diagnostics['low_confidence_rejected'] += 1
                 continue
-            road_candidates.append((key, voxel, distance_to_object))
-
-        obstacle_tree = None
-        if obstacle_positions:
-            obstacle_tree = cKDTree(np.asarray(obstacle_positions))
+            traversable_voxels.append(QueryApproachVoxel(
+                key=key,
+                position=voxel['pos'],
+                confidence=float(confidence),
+            ))
         robot_position = self.get_robot_position()
-        if (
-            robot_position is None
-            and getattr(
-                self,
-                'query_require_robot_pose_for_approach',
-                False,
-            )
-        ):
+        return QueryApproachSnapshot(
+            voxels=tuple(traversable_voxels),
+            robot_position=robot_position,
+            voxel_size=self.voxel_map.voxel_size,
+            total_voxels=len(self.voxel_map.voxels),
+            filtered_diagnostics=diagnostics,
+            map_revision=self._query_map_revision() or 0,
+        )
+
+    def _query_approach_policy(self):
+        return ApproachPolicy(
+            min_distance_m=self.query_approach_min_distance_m,
+            max_distance_m=self.query_approach_radius_m,
+            desired_distance_m=self.query_approach_distance_m,
+            robot_distance_weight=getattr(
+                self, 'query_robot_distance_weight', 0.1),
+            prefer_robot_side=getattr(
+                self, 'query_prefer_robot_side', True),
+            require_robot_side=getattr(
+                self, 'query_require_robot_side', False),
+            same_side_min_cosine=getattr(
+                self, 'query_same_side_min_cosine', 0.0),
+            require_robot_pose=getattr(
+                self, 'query_require_robot_pose_for_approach', False),
+            require_safe=self.query_require_safe_approach,
+        )
+
+    def _record_approach_decision(self, decision):
+        self._last_approach_was_safe = bool(decision.safe)
+        self._last_approach_diagnostics = dict(decision.diagnostics)
+        if decision.reason == 'robot_pose_missing':
             self.get_logger().warn(
                 '无法获取机器人位姿，拒绝选择可能位于物体另一侧的接近点。')
-            return None, None
-
-        best = None
-        best_rank = None
-        for key, voxel, distance_to_object in road_candidates:
-            position = voxel['pos']
-            if obstacle_tree is not None:
-                nearby_obstacles = obstacle_tree.query_ball_point(
-                    position[:2], self.query_clearance_radius_m)
-                if nearby_obstacles:
-                    continue
-            confidence = self.voxel_map.get_confidence(key)
-            robot_distance = 0.0
-            height_cost = 0.0
-            same_side = True
-            direct_path_clear = True
-            if robot_position is not None:
-                robot_distance = float(
-                    np.linalg.norm(position[:2] - robot_position[:2]))
-                height_cost = abs(float(position[2] - robot_position[2]))
-                robot_direction = robot_position[:2] - object_pos[:2]
-                candidate_direction = position[:2] - object_pos[:2]
-                direction_norm = float(
-                    np.linalg.norm(robot_direction)
-                    * np.linalg.norm(candidate_direction)
-                )
-                if direction_norm > 1e-9:
-                    side_cosine = float(np.dot(
-                        robot_direction,
-                        candidate_direction,
-                    ) / direction_norm)
-                    same_side = side_cosine >= getattr(
-                        self, 'query_same_side_min_cosine', 0.0)
-                if (
-                    getattr(self, 'query_require_robot_side', False)
-                    and not same_side
-                ):
-                    continue
-                path_clearance = float(getattr(
-                    self,
-                    'query_path_clearance_radius_m',
-                    self.query_clearance_radius_m,
-                ))
-                sample_step = min(
-                    max(path_clearance * 0.5, 0.05),
-                    max(float(self.voxel_map.voxel_size), 0.05),
-                )
-                direct_path_clear = self._segment_has_clearance(
-                    robot_position[:2],
-                    position[:2],
-                    obstacle_tree,
-                    path_clearance,
-                    sample_step,
-                )
-            cost = (
-                abs(distance_to_object - self.query_approach_distance_m)
-                + getattr(self, 'query_robot_distance_weight', 0.1)
-                * robot_distance
-                + 0.2 * height_cost
-                - 0.1 * confidence
-            )
-            preference_rank = (
-                int(
-                    getattr(self, 'query_prefer_robot_side', True)
-                    and not same_side
-                ),
-                int(
-                    getattr(self, 'query_prefer_direct_path', True)
-                    and not direct_path_clear
-                ),
-                cost,
-            )
-            if best_rank is None or preference_rank < best_rank:
-                best_rank = preference_rank
-                best = (
-                    key,
-                    position,
-                    same_side,
-                    direct_path_clear,
-                )
-
-        if best is not None:
-            self._last_approach_was_safe = True
-            self.get_logger().info(
-                f'安全接近点: x={best[1][0]:.2f}, y={best[1][1]:.2f}, '
-                f'机器人同侧={best[2]}, 直线路径净空={best[3]}')
-            return best[0], best[1]
-        if self.query_require_safe_approach:
-            return None, None
-
-        # Simulation fallback: use a line-of-sight standoff point instead of
-        # navigating into the object center. Nav2's geometric layers still
-        # perform the final collision check.
-        if robot_position is None:
+        elif decision.reason == 'robot_pose_missing_for_fallback':
             self.get_logger().warn(
-                '没有安全road接近点且机器人位姿不可用，拒绝回退到物体中心。')
-            return None, None
-        fallback_position = np.array(object_pos, dtype=np.float32)
-        direction = robot_position[:2] - object_pos[:2]
-        direction_norm = float(np.linalg.norm(direction))
-        if direction_norm <= 1e-6:
-            return None, None
-        fallback_position[:2] = (
-            object_pos[:2]
-            + direction / direction_norm * self.query_approach_distance_m
+                '没有安全可通行接近点且机器人位姿不可用，拒绝回退到物体中心。')
+        elif decision.succeeded and decision.safe:
+            same_side = decision.diagnostics.get('same_side', True)
+            self.get_logger().info(
+                f'接近点: x={decision.position[0]:.2f}, '
+                f'y={decision.position[1]:.2f}, 机器人同侧={same_side}')
+        elif decision.fallback_used:
+            self.get_logger().warn(
+                '没有找到满足语义约束的可通行体素，使用视线方向接近点；'
+                '该回退仅应用于仿真配置。')
+        return decision.key, decision.position
+
+    def find_approach_goal(
+        self,
+        object_pos,
+        query_class_idx,
+        approach_snapshot=None,
+    ):
+        """Find an approach goal using one shared map-derived snapshot."""
+        is_traversable_query = (
+            query_class_idx in getattr(self, 'traversable_class_ids', ())
         )
-        fallback_position[2] = robot_position[2]
-        fallback_clearance = float(getattr(
-            self,
-            'query_path_clearance_radius_m',
-            self.query_clearance_radius_m,
-        ))
-        if obstacle_tree is not None:
-            if obstacle_tree.query_ball_point(
-                fallback_position[:2],
-                fallback_clearance,
-            ):
+        if approach_snapshot is None and is_traversable_query:
+            key = self.voxel_map.get_voxel_indices(object_pos)
+            self._last_approach_was_safe = True
+            self._last_approach_diagnostics = {
+                'total_voxels': len(self.voxel_map.voxels),
+                'selected': 1,
+            }
+            return key, object_pos
+        if approach_snapshot is None:
+            approach_snapshot = self._build_query_approach_snapshot((object_pos,))
+        decision = select_approach_goal(
+            approach_snapshot,
+            object_pos,
+            self._query_approach_policy(),
+            is_traversable_query=is_traversable_query,
+        )
+        return self._record_approach_decision(decision)
+
+    def _ranked_query_candidates(self, selected):
+        """Return the ranked clusters from the latest query selection."""
+        if selected is None:
+            return []
+        ranked = getattr(self, '_last_query_clusters', None)
+        if not ranked or ranked[0] is not selected:
+            return [selected]
+        return ranked
+
+    def _try_ranked_query_goals(self, selected, query_class_idx, query_source):
+        """Publish the first ranked same-class target with a valid approach."""
+        candidates = self._ranked_query_candidates(selected)
+        if not candidates:
+            return False
+        if not getattr(self, 'projection_calibration_verified', False):
+            # Calibration failure is global; do not scan the map or retry each
+            # cluster just to repeat the same refusal.
+            return self._publish_query_goal(
+                candidates[0], query_class_idx, query_source=query_source)
+
+        attempt_limit = getattr(self, 'query_fallback_max_attempts', 2)
+        target_snapshot = QueryTargetSnapshot(
+            candidates=tuple(candidates[:max(0, int(attempt_limit))]),
+            map_revision=self._query_map_revision() or 0,
+        )
+        is_traversable = query_class_idx in getattr(
+            self, 'traversable_class_ids', ())
+        if is_traversable:
+            approach_snapshot = QueryApproachSnapshot(
+                voxels=(), robot_position=None,
+                voxel_size=self.voxel_map.voxel_size,
+                total_voxels=len(self.voxel_map.voxels),
+                filtered_diagnostics={},
+            )
+        else:
+            approach_snapshot = self._build_query_approach_snapshot(
+                tuple(item['pos'] for item in target_snapshot.candidates))
+        policy = self._query_approach_policy()
+
+        def evaluate_candidate(candidate):
+            return select_approach_goal(
+                approach_snapshot, candidate['pos'], policy,
+                is_traversable_query=is_traversable,
+            )
+
+        decision = plan_query_target(
+            target_snapshot, attempt_limit, evaluate_candidate)
+        if not decision.succeeded:
+            if decision.approach is not None:
+                self._record_approach_decision(decision.approach)
                 self.get_logger().warn(
-                    '视线方向回退点与语义障碍冲突，拒绝发布导航目标。')
-                return None, None
-        self.get_logger().warn(
-            '没有找到满足语义约束的road体素，使用视线方向接近点；'
-            '该回退仅应用于仿真配置。')
-        return (
-            self.voxel_map.get_voxel_indices(fallback_position),
-            fallback_position,
+                    f'找到 query="{self.last_query_text}"，但候选均无可用接近点。'
+                    f'diagnostics={dict(decision.approach.diagnostics)}')
+            return False
+        if decision.attempts > 1:
+            self.get_logger().info(
+                f'首选同类目标没有可用接近点，改用第 '
+                f'{decision.attempts} 个候选目标。')
+        return self._publish_query_goal(
+            decision.candidate, query_class_idx, query_source,
+            approach_decision=decision.approach,
         )
 
     def select_class_query_target(self, query_class_idx, query_color=None):
@@ -1573,27 +1667,33 @@ class GABsvmNode(Node):
             f'主类别Top3=[{top_classes}]'
         )
 
-    def _publish_query_goal(self, selected, query_class_idx, query_source):
+    def _publish_query_goal(
+        self,
+        selected,
+        query_class_idx,
+        query_source,
+        approach_snapshot=None,
+        approach_decision=None,
+    ):
         if not getattr(self, 'projection_calibration_verified', False):
             self.get_logger().warn(
                 f'找到 query="{self.last_query_text}"，但 LiDAR-相机投影标定'
                 '尚未验证，拒绝发布目标位姿和导航目标。')
             return False
         object_pos = selected['pos']
-        target = PoseStamped()
-        target.header.frame_id = self.odom_frame
-        target.header.stamp = self.get_clock().now().to_msg()
-        target.pose.position.x = float(object_pos[0])
-        target.pose.position.y = float(object_pos[1])
-        target.pose.position.z = float(object_pos[2])
-        target.pose.orientation.w = 1.0
-        self.query_target_pub.publish(target)
-
-        goal_key, goal_pos = self.find_approach_goal(
-            object_pos, query_class_idx)
+        if approach_decision is None:
+            goal_key, goal_pos = self.find_approach_goal(
+                object_pos, query_class_idx,
+                approach_snapshot=approach_snapshot,
+            )
+        else:
+            goal_key, goal_pos = self._record_approach_decision(
+                approach_decision)
         if goal_pos is None:
+            diagnostics = getattr(self, '_last_approach_diagnostics', {})
             self.get_logger().warn(
-                f'找到 query="{self.last_query_text}"，但附近没有满足间距和净空要求的road接近点。')
+                f'找到 query="{self.last_query_text}"，但附近没有满足可通行、间距和同侧要求的'
+                f'traversable 接近点。diagnostics={diagnostics}')
             return False
         self.current_goal_key = (
             goal_key if self._last_approach_was_safe else None)
@@ -1611,20 +1711,39 @@ class GABsvmNode(Node):
             f'目标坐标: x={object_pos[0]:.2f}, y={object_pos[1]:.2f}, '
             f'导航坐标: x={goal_pos[0]:.2f}, y={goal_pos[1]:.2f}')
 
+        target = PoseStamped()
+        target.header.frame_id = self.odom_frame
+        target.header.stamp = self.get_clock().now().to_msg()
+        target.pose.position.x = float(object_pos[0])
+        target.pose.position.y = float(object_pos[1])
+        target.pose.position.z = float(object_pos[2])
+        target.pose.orientation.w = 1.0
+        self.query_target_pub.publish(target)
+
         goal = PoseStamped()
         goal.header.frame_id = self.odom_frame
         goal.header.stamp = self.get_clock().now().to_msg()
         goal.pose.position.x = float(goal_pos[0])
         goal.pose.position.y = float(goal_pos[1])
         goal.pose.position.z = float(goal_pos[2])
-        yaw = float(np.arctan2(
-            object_pos[1] - goal_pos[1], object_pos[0] - goal_pos[0]))
+        yaw = query_goal_yaw(
+            object_pos,
+            goal_pos,
+            robot_position=self.get_robot_position(),
+            face_target=getattr(self, 'query_face_target', True),
+        )
         goal.pose.orientation.z = float(np.sin(yaw / 2.0))
         goal.pose.orientation.w = float(np.cos(yaw / 2.0))
         self.goal_pub.publish(goal)
         return True
 
-    def query_class_cb(self, query_class_idx, query_color=None):
+    def query_class_cb(
+        self,
+        query_class_idx,
+        query_color=None,
+        log_failure=True,
+    ):
+        self._record_query_attempt()
         (
             selected,
             candidate_count,
@@ -1632,14 +1751,21 @@ class GABsvmNode(Node):
             color_rejected_count,
         ) = self.select_class_query_target(query_class_idx, query_color)
         if selected is None:
-            self.get_logger().warn(
-                f'🔍 未找到合适目标。backend=segformer, '
-                f'query="{self.last_query_text}", 候选体素={candidate_count}, '
-                f'类别阈值过滤={class_rejected_count}, '
-                f'{self.format_class_query_diagnostics()}')
-            return
-        self._publish_query_goal(
+            if log_failure:
+                self.get_logger().warn(
+                    f'🔍 未找到合适目标。backend=segformer, '
+                    f'query="{self.last_query_text}", '
+                    f'候选体素={candidate_count}, '
+                    f'类别阈值过滤={class_rejected_count}, '
+                    f'{self.format_class_query_diagnostics()}')
+            return False
+        published = self._try_ranked_query_goals(
             selected, query_class_idx, query_source='segformer')
+        self.query_retry_pending = (
+            not published
+            and getattr(self, 'projection_calibration_verified', False)
+        )
+        return published
 
     def query_feature_cb(self, msg):
         query_feat = np.array(msg.data, dtype=np.float32)
@@ -1652,7 +1778,29 @@ class GABsvmNode(Node):
             self.get_logger().warn('查询特征范数为零，忽略本次查询。')
             return
         query_feat = query_feat / query_norm
+        label = msg.layout.dim[0].label if msg.layout.dim else ''
+        feature_query_text = (
+            label[len('query:'):].strip().lower()
+            if label.startswith('query:')
+            else ''
+        )
+        if not feature_query_text:
+            self.get_logger().warn('查询特征缺少 query 身份，忽略。')
+            return
+        self.received_query_feature_text = feature_query_text
+        self.received_query_feature = query_feat.copy()
+        if feature_query_text != self.last_query_text:
+            self.get_logger().warn(
+                '忽略过期查询特征: '
+                f'feature_query="{feature_query_text}", '
+                f'active_query="{self.last_query_text}"')
+            return
+        self.last_query_feature = query_feat.copy()
+        return self._try_clip_query(query_feat)
 
+    def _try_clip_query(self, query_feat, log_failure=True):
+        """Evaluate the active CLIP query against the current voxel snapshot."""
+        self._record_query_attempt()
         query_class_idx = self.get_query_class_index()
         accepted_candidates = []
         feature_candidates = []
@@ -1736,31 +1884,76 @@ class GABsvmNode(Node):
                     f'({class_rejected_count}/{candidate_count} rejected, '
                     f'min_class_prob={self.query_min_class_prob:.2f})，'
                     '改用 CLIP 特征相似度兜底。')
-            self._publish_query_goal(
+            published = self._try_ranked_query_goals(
                 selected, query_class_idx, query_source='clip')
-        else:
+            self.query_retry_pending = (
+                not published
+                and getattr(self, 'projection_calibration_verified', False)
+            )
+            return published
+        if log_failure:
             self.get_logger().warn(
                 f'🔍 未找到合适目标。query="{self.last_query_text}", '
                 f'候选体素={candidate_count}, 类别阈值过滤={class_rejected_count}, '
                 f'低颜色分数体素={color_rejected_count}')
+        return False
+
+    def retry_pending_query(self):
+        """Retry one unresolved query after the semantic map grows."""
+        if not self.query_retry_pending or not self.last_query_text:
+            return False
+        if not self._query_retry_allowed():
+            return False
+        if self.semantic_backend == 'segformer':
+            if self.last_query_class_idx is None:
+                return False
+            return self.query_class_cb(
+                self.last_query_class_idx,
+                self.last_query_color,
+                log_failure=False,
+            )
+        if self.last_query_feature is None:
+            return False
+        return self._try_clip_query(
+            self.last_query_feature,
+            log_failure=False,
+        )
 
     def _should_process_frame(self):
         self.frame_count += 1
         return self.frame_count % self.frame_stride == 0
 
-    def sync_callback(self, pc_msg, img_msg):
-        """Fuse the legacy CLIP grid with a synchronized point cloud."""
+    def clip_sync_callback(self, pc_msg, clip_frame_msg, source_image_msg):
+        """Fuse one Header-bearing atomic CLIP frame with its source RGB."""
         if not self._should_process_frame():
             return
-        if self.logits_grid is None:
-            return
         try:
-            if self.image_is_compressed:
-                cv_img = self.bridge.compressed_imgmsg_to_cv2(
-                    img_msg, 'rgb8')
-            else:
-                cv_img = self.bridge.imgmsg_to_cv2(
-                    img_msg, 'rgb8')
+            if not self._same_image_header(
+                clip_frame_msg.header, source_image_msg.header
+            ):
+                self.get_logger().warn(
+                    'CLIP frame and source RGB do not share the same Header; '
+                    'refusing a cross-frame fusion.')
+                return
+            clip_frame = float32_image_to_array(
+                clip_frame_msg,
+                expected_channels=self.num_classes + self.feat_dim,
+            )
+            if clip_frame.shape[:2] != (self.grid_rows, self.grid_cols):
+                self.get_logger().warn(
+                    'CLIP frame grid shape mismatch: '
+                    f'{clip_frame.shape[:2]} != '
+                    f'{(self.grid_rows, self.grid_cols)}')
+                return
+            logits_grid = clip_frame[..., :self.num_classes]
+            features_grid = clip_frame[..., self.num_classes:]
+            cv_img = self.bridge.imgmsg_to_cv2(
+                source_image_msg, desired_encoding='rgb8')
+            cv_img = np.asarray(cv_img)
+            if cv_img.ndim != 3 or cv_img.shape[2] < 3:
+                self.get_logger().warn(
+                    f'CLIP source image must be RGB; got {cv_img.shape}')
+                return
             height, width = cv_img.shape[:2]
             patch_h = height // self.grid_rows
             patch_w = width // self.grid_cols
@@ -1775,10 +1968,8 @@ class GABsvmNode(Node):
                     valid_v // patch_h, 0, self.grid_rows - 1)
                 grid_c = np.clip(
                     valid_u // patch_w, 0, self.grid_cols - 1)
-                logits = self.logits_grid[grid_r, grid_c]
-                features = None
-                if self.feats_grid is not None:
-                    features = self.feats_grid[grid_r, grid_c]
+                logits = logits_grid[grid_r, grid_c]
+                features = features_grid[grid_r, grid_c]
                 colors = cv_img[valid_v, valid_u, :3]
                 return logits, features, colors
 
@@ -1814,6 +2005,12 @@ class GABsvmNode(Node):
                 self.get_logger().warn(
                     'SegFormer posterior and source RGB do not share the '
                     'same Header; refusing a cross-frame fusion.')
+                return
+            if self.semantic_capability is None:
+                self.get_logger().warn(
+                    'SegFormer capability not ready; refusing semantic fusion.',
+                    throttle_duration_sec=5.0,
+                )
                 return
             posterior = posterior_image_to_array(
                 posterior_msg,
@@ -1856,6 +2053,12 @@ class GABsvmNode(Node):
     ):
         """Fuse the legacy hard mask/confidence SegFormer interface."""
         if not self._should_process_frame():
+            return
+        if self.semantic_capability is None:
+            self.get_logger().warn(
+                'SegFormer capability not ready; refusing semantic fusion.',
+                throttle_duration_sec=5.0,
+            )
             return
         try:
             class_mask = self.bridge.imgmsg_to_cv2(
@@ -1997,10 +2200,10 @@ class GABsvmNode(Node):
             'acceleration_deviation': acceleration_deviation,
         }
 
-        if source_frame != target_frame and stamp.nanoseconds == 0:
+        if stamp.nanoseconds == 0:
             self.consecutive_tf_drops += 1
             self.get_logger().warn(
-                '丢弃无时间戳点云，避免用最新位姿污染语义地图: '
+                '丢弃无时间戳点云，避免用处理时刻污染语义地图: '
                 f'source={source_frame}, target={target_frame}')
             return False
 
@@ -2147,14 +2350,34 @@ class GABsvmNode(Node):
 
     def _fuse_projected_semantic_frame(self, frame_data, valid_points):
         """Fuse an already projected frame in the odometry coordinate frame."""
+        stamp_msg = frame_data['stamp_msg']
+        observation_ns = (
+            int(stamp_msg.sec) * 1_000_000_000 + int(stamp_msg.nanosec))
+        if observation_ns <= 0:
+            self.get_logger().warn(
+                '丢弃无观测时刻的语义帧，拒绝使用处理时刻替代。')
+            return False
+        latest_ns = getattr(self, 'latest_fused_observation_ns', None)
+        if latest_ns is not None and observation_ns < latest_ns:
+            now_ns = self.get_clock().now().nanoseconds
+            if now_ns >= latest_ns:
+                self.get_logger().warn(
+                    '丢弃迟到的旧语义帧，避免连续时间证据回退: '
+                    f'observation={observation_ns / 1e9:.6f}s, '
+                    f'latest={latest_ns / 1e9:.6f}s')
+                return False
+            # Simulation /clock restarted. Rebase the ordering guard and let
+            # VoxelMap re-anchor its per-voxel continuous-time clocks.
+        self.latest_fused_observation_ns = observation_ns
         self.voxel_map.update(
             points=valid_points,
             reliability=frame_data['reliability'],
             logits=frame_data['logits'],
             features=frame_data['features'],
             colors=frame_data['colors'],
-            timestamp_sec=self.get_clock().now().nanoseconds / 1e9,
+            timestamp_sec=observation_ns / 1e9,
         )
+        self.retry_pending_query()
 
         processed_count = frame_data['processed_count']
         if processed_count % self.entropy_publish_every_n_processed == 0:
@@ -2186,6 +2409,7 @@ class GABsvmNode(Node):
                     f'angular_rms={frame_data["angular_rms"]:.2f}rad/s, '
                     f'accel_dev='
                     f'{frame_data["acceleration_deviation"]:.2f}m/s^2')
+        return True
 
     def create_cloud_msg(self, header, points_rgb):
         msg = PointCloud2()
@@ -2362,7 +2586,7 @@ def main():
         rclpy.spin(node)
     except (KeyboardInterrupt, ExternalShutdownException):
         pass
-    except (RCLError, RuntimeError):
+    except RCLError:
         if rclpy.ok():
             raise
     finally:

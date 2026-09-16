@@ -2,9 +2,11 @@ import numpy as np
 from collections import deque
 from builtin_interfaces.msg import Time as TimeMsg
 from sensor_msgs.msg import Imu
+from std_msgs.msg import Float32MultiArray, MultiArrayDimension, Header
 
 from semantic_mapping.runtime.ga_bsvm_node import (
     GABsvmNode,
+    query_goal_yaw,
     resolve_semantic_class_indices,
     scale_camera_matrix,
 )
@@ -52,20 +54,18 @@ def make_approach_node(robot_position):
     node = object.__new__(GABsvmNode)
     node.voxel_map = FakeApproachMap()
     node.query_min_weight_sum = 2.0
+    node.query_approach_min_confidence = 0.25
     node.query_approach_min_distance_m = 1.5
     node.query_approach_radius_m = 2.5
     node.query_approach_distance_m = 2.0
-    node.query_clearance_radius_m = 0.35
-    node.query_path_clearance_radius_m = 0.35
     node.query_robot_distance_weight = 0.0
     node.query_require_safe_approach = True
     node.query_prefer_robot_side = True
     node.query_require_robot_side = True
-    node.query_prefer_direct_path = True
     node.query_same_side_min_cosine = 0.0
     node.query_require_robot_pose_for_approach = True
     node.semantic_cost_dict = {0: 0, 1: 100, 2: -1}
-    node.road_class_idx = 0
+    node.traversable_class_ids = frozenset({0})
     node.get_robot_position = lambda: robot_position
     node.get_logger = lambda: type(
         'Logger',
@@ -212,6 +212,21 @@ def test_unaligned_imu_samples_are_not_treated_as_fully_reliable():
     assert node.imu_match_count == 0
 
 
+def test_nonfinite_imu_sample_fails_closed_without_entering_buffer():
+    node, _ = make_motion_node()
+    message = Imu()
+    message.header.stamp.sec = 10
+    message.angular_velocity.x = float('nan')
+    message.linear_acceleration.z = 9.81
+
+    node.imu_callback(message)
+    reliability, _, _ = node.compute_motion_reliability(
+        TimeMsg(sec=10, nanosec=0))
+
+    assert len(node.imu_buffer) == 0
+    assert reliability == 0.2
+
+
 def test_semantic_class_indices_are_resolved_from_reordered_vocab():
     vocab = ['car', 'unknown background', 'road', 'electric bicycle', 'person']
 
@@ -315,6 +330,20 @@ def test_unverified_projection_calibration_suppresses_navigation_pose():
     assert '标定' in warnings[0]
 
 
+def test_simulation_goal_heading_follows_approach_path_when_requested():
+    object_pos = np.array([1.29, 0.04, 0.15], dtype=np.float32)
+    goal_pos = np.array([2.25, 0.15, -0.05], dtype=np.float32)
+    robot_position = np.zeros(3, dtype=np.float32)
+
+    target_facing = query_goal_yaw(
+        object_pos, goal_pos, robot_position=robot_position, face_target=True)
+    approach_facing = query_goal_yaw(
+        object_pos, goal_pos, robot_position=robot_position, face_target=False)
+
+    assert abs(target_facing) > 2.5
+    assert abs(approach_facing) < 0.2
+
+
 def test_person_query_rejects_wall_sized_cluster():
     node = object.__new__(GABsvmNode)
     node.query_max_candidates = 100
@@ -343,6 +372,114 @@ def test_person_query_rejects_wall_sized_cluster():
     assert selected['pos'][0] < 1.0
 
 
+def test_query_tries_next_same_class_cluster_when_first_has_no_approach():
+    node = make_approach_node(np.array([0.0, 0.0, 0.0]))
+    node.query_max_candidates = 100
+    node.query_cluster_radius_m = 0.5
+    node.query_cluster_min_voxels = 1
+    node.query_cluster_min_evidence = 1.0
+    node.query_cluster_support_weight = 0.0
+    node.query_distance_weight = 0.0
+    node.query_class_max_extent_m = [3.0, 3.0, 3.0]
+
+    first = make_candidate(1, 4.0, 0.0, 0.95)
+    second = make_candidate(2, 8.0, 0.0, 0.80)
+    # Only the lower-ranked object has a same-side traversable approach voxel.
+    node.voxel_map.add((60, 0, 0), [6.0, 0.0, 0.0], 0)
+
+    selected = node.select_query_cluster(
+        [first, second], query_class_idx=1)
+    assert selected is node._last_query_clusters[0]
+    assert selected['key'] == first['key']
+
+    node.projection_calibration_verified = True
+    attempts = []
+
+    def publish_if_approachable(
+        candidate, query_class_idx, query_source, approach_decision,
+    ):
+        attempts.append(candidate['key'])
+        assert approach_decision.succeeded
+        return True
+
+    node._publish_query_goal = publish_if_approachable
+
+    assert node._try_ranked_query_goals(
+        selected, query_class_idx=1, query_source='segformer')
+    assert attempts == [second['key']]
+
+
+def test_failed_candidate_does_not_publish_target_pose():
+    node = make_approach_node(np.array([0.0, 0.0, 0.0]))
+    node.projection_calibration_verified = True
+    node.last_query_text = 'car'
+    node.last_query_color = None
+    node.odom_frame = 'odom'
+    node.query_face_target = True
+    node.get_clock = lambda: type(
+        'Clock',
+        (),
+        {'now': lambda self: type(
+            'Now',
+            (),
+            {'to_msg': lambda self: TimeMsg(), 'nanoseconds': 1_000_000_000},
+        )()},
+    )()
+    node.query_target_pub = CapturingPublisher()
+    node.goal_pub = CapturingPublisher()
+    selected = {
+        'pos': np.array([4.0, 0.0, 0.0], dtype=np.float32),
+        'score': 0.9,
+        'similarity': 0.9,
+        'class_probability': 0.9,
+        'color_score': 0.0,
+        'color_support_ratio': 0.0,
+        'voxel_count': 1,
+        'evidence': 3.0,
+    }
+
+    assert not node._publish_query_goal(selected, 1, 'segformer')
+    assert node.query_target_pub.messages == []
+    assert node.goal_pub.messages == []
+
+
+def test_ranked_query_keeps_all_failed_candidate_poses_unpublished():
+    node = make_approach_node(np.array([0.0, 0.0, 0.0]))
+    node.projection_calibration_verified = True
+    node.last_query_text = 'car'
+    node.last_query_color = None
+    node.odom_frame = 'odom'
+    node.query_face_target = True
+    node.query_fallback_max_attempts = 2
+    node.query_max_candidates = 100
+    node.query_cluster_radius_m = 0.5
+    node.query_cluster_min_voxels = 1
+    node.query_cluster_min_evidence = 1.0
+    node.query_cluster_support_weight = 0.0
+    node.query_distance_weight = 0.0
+    node.query_class_max_extent_m = [3.0, 3.0, 3.0]
+    node.query_target_pub = CapturingPublisher()
+    node.goal_pub = CapturingPublisher()
+    node.get_clock = lambda: type(
+        'Clock',
+        (),
+        {'now': lambda self: type(
+            'Now',
+            (),
+            {'to_msg': lambda self: TimeMsg(), 'nanoseconds': 1_000_000_000},
+        )()},
+    )()
+    first = make_candidate(1, 4.0, 0.0, 0.95)
+    second = make_candidate(2, 8.0, 0.0, 0.80)
+    selected = node.select_query_cluster(
+        [first, second], query_class_idx=1)
+
+    assert not node._try_ranked_query_goals(
+        selected, query_class_idx=1, query_source='segformer')
+    assert node.query_target_pub.messages == []
+    assert node.goal_pub.messages == []
+
+
 def test_simulation_fallback_keeps_standoff_distance():
     node = object.__new__(GABsvmNode)
     node.voxel_map = VoxelMap(K=6)
@@ -350,10 +487,9 @@ def test_simulation_fallback_keeps_standoff_distance():
     node.query_approach_min_distance_m = 0.6
     node.query_approach_radius_m = 1.5
     node.query_approach_distance_m = 1.0
-    node.query_clearance_radius_m = 0.35
     node.query_require_safe_approach = False
     node.semantic_cost_dict = {0: 0, 1: 100, 2: 100, 3: 100, 4: 100, 5: -1}
-    node.road_class_idx = 0
+    node.traversable_class_ids = frozenset({0})
     node.get_robot_position = lambda: np.array([0.0, 0.0, 0.0])
     node.get_logger = lambda: type(
         'Logger', (), {'warn': lambda self, message: None})()
@@ -366,7 +502,7 @@ def test_simulation_fallback_keeps_standoff_distance():
 
 def test_approach_goal_uses_named_road_class_after_vocab_reordering():
     node = make_approach_node(np.array([4.0, 0.0, 0.0]))
-    node.road_class_idx = 1
+    node.traversable_class_ids = frozenset({1})
     node.semantic_cost_dict = {0: 100, 1: 0, 2: -1}
     node.voxel_map.add((20, 0, 0), [2.0, 0.0, 0.0], 1)
     node.voxel_map.add((0, 0, 0), [0.0, 0.0, 0.0], 0)
@@ -379,7 +515,7 @@ def test_approach_goal_uses_named_road_class_after_vocab_reordering():
 
 def test_approach_goal_prefers_robot_side_over_far_side():
     node = make_approach_node(np.array([4.0, 0.0, 0.0]))
-    node.voxel_map.add((20, 0, 0), [2.0, 0.0, 0.0], 0, confidence=0.1)
+    node.voxel_map.add((20, 0, 0), [2.0, 0.0, 0.0], 0, confidence=0.3)
     node.voxel_map.add((-20, 0, 0), [-2.0, 0.0, 0.0], 0, confidence=1.0)
     node.voxel_map.add((0, 0, 0), [0.0, 0.0, 0.0], 1)
 
@@ -388,6 +524,19 @@ def test_approach_goal_prefers_robot_side_over_far_side():
 
     np.testing.assert_allclose(goal, [2.0, 0.0, 0.0], atol=1e-6)
     assert node._last_approach_was_safe is True
+
+
+def test_approach_goal_rejects_low_confidence_road_argmax():
+    node = make_approach_node(np.array([4.0, 0.0, 0.0]))
+    node.voxel_map.add(
+        (20, 0, 0), [2.0, 0.0, 0.0], 0, confidence=0.1)
+
+    key, goal = node.find_approach_goal(
+        np.array([0.0, 0.0, 0.0]), query_class_idx=1)
+
+    assert key is None
+    assert goal is None
+    assert node._last_approach_was_safe is False
 
 
 def test_school_parking_regression_avoids_goal_behind_yellow_vehicle():
@@ -417,19 +566,32 @@ def test_approach_goal_rejects_only_far_side_candidate():
     assert node._last_approach_was_safe is False
 
 
-def test_approach_goal_prefers_clear_direct_route_on_same_side():
+def test_approach_goal_leaves_route_selection_to_nav2():
     node = make_approach_node(np.array([4.0, 0.0, 0.0]))
     diagonal_y = np.sqrt(4.0 - 1.5 ** 2)
     node.voxel_map.add((20, 0, 0), [2.0, 0.0, 0.0], 0, confidence=1.0)
     node.voxel_map.add(
-        (15, 13, 0), [1.5, diagonal_y, 0.0], 0, confidence=0.1)
+        (15, 13, 0), [1.5, diagonal_y, 0.0], 0, confidence=0.3)
     node.voxel_map.add((30, 0, 0), [3.0, 0.0, 0.0], 1)
     node.voxel_map.add((0, 0, 0), [0.0, 0.0, 0.0], 1)
 
     _, goal = node.find_approach_goal(
         np.array([0.0, 0.0, 0.0]), query_class_idx=1)
 
-    np.testing.assert_allclose(goal, [1.5, diagonal_y, 0.0], atol=1e-6)
+    np.testing.assert_allclose(goal, [2.0, 0.0, 0.0], atol=1e-6)
+
+
+def test_approach_goal_allows_obstacle_on_direct_route():
+    node = make_approach_node(np.array([4.0, 0.0, 0.0]))
+    node.voxel_map.add((20, 0, 0), [2.0, 0.0, 0.0], 0)
+    node.voxel_map.add((30, 0, 0), [3.0, 0.0, 0.0], 1)
+
+    key, goal = node.find_approach_goal(
+        np.array([0.0, 0.0, 0.0]), query_class_idx=1)
+
+    assert key == (20, 0, 0)
+    np.testing.assert_allclose(goal, [2.0, 0.0, 0.0])
+    assert 'direct_path_rejected' not in node._last_approach_diagnostics
 
 
 def test_approach_goal_requires_robot_pose_when_configured():
@@ -548,3 +710,195 @@ def test_pending_tf_retry_does_not_block_newer_transform():
 
     assert len(node.pending_tf_frames) == 1
     np.testing.assert_allclose(fused, [[[3.0, 1.0, 1.0]]])
+
+
+def test_fusion_uses_sensor_observation_time_and_retries_pending_query():
+    updates = []
+    retries = []
+
+    class FakeMap:
+        def update(self, **kwargs):
+            updates.append(kwargs)
+
+        def get_visualization_clouds(self):
+            return [], []
+
+    node = object.__new__(GABsvmNode)
+    node.voxel_map = FakeMap()
+    node.entropy_publish_every_n_processed = 2
+    node.cloud_publish_stride = 2
+    node.retry_pending_query = lambda: retries.append(True)
+    frame_data = {
+        'reliability': np.ones(1),
+        'logits': np.asarray([[1.0, 0.0]]),
+        'features': None,
+        'colors': None,
+        'stamp_msg': TimeMsg(sec=12, nanosec=500_000_000),
+        'processed_count': 1,
+        'total_points': 1,
+        'motion_reliability': 1.0,
+        'angular_rms': 0.0,
+        'acceleration_deviation': 0.0,
+    }
+
+    node._fuse_projected_semantic_frame(
+        frame_data, np.asarray([[1.0, 2.0, 3.0]]))
+
+    assert updates[0]['timestamp_sec'] == 12.5
+    assert retries == [True]
+
+
+def test_fusion_rejects_missing_observation_time():
+    node = object.__new__(GABsvmNode)
+    node.voxel_map = type(
+        'Map', (), {'update': lambda self, **kwargs: (_ for _ in ()).throw(
+            AssertionError('missing sensor time must not update the map'))})()
+    node.get_logger = lambda: type(
+        'Logger', (), {'warn': lambda self, message: None})()
+    frame_data = {'stamp_msg': TimeMsg()}
+
+    assert not node._fuse_projected_semantic_frame(
+        frame_data, np.asarray([[1.0, 2.0, 3.0]]))
+
+
+def test_stale_query_feature_is_not_interpreted_as_latest_text():
+    node = object.__new__(GABsvmNode)
+    node.feat_dim = 2
+    node.last_query_text = 'blue car'
+    node.last_query_class_idx = 1
+    node.last_query_color = 'blue'
+    node.vocab = ['road', 'car', 'unknown background']
+    node.query_min_weight_sum = 1.0
+    node.query_min_similarity = -1.0
+    node.query_min_class_prob = 0.0
+    node.query_require_class_argmax = False
+    node.query_feature_weight = 0.7
+    node.query_class_weight = 0.3
+    node.query_allow_feature_fallback = False
+    node.voxel_map = type(
+        'Map',
+        (),
+        {
+            'voxels': {
+                (0, 0, 0): {
+                    'feature_512': np.asarray([1.0, 0.0]),
+                    'weight_sum': 2.0,
+                    'pos': np.zeros(3),
+                    'color_rgb': None,
+                },
+            },
+            'get_evidence_probabilities': lambda self, key: np.asarray(
+                [0.1, 0.8, 0.1]),
+        },
+    )()
+    selections = []
+    node.score_query_color = lambda voxel, color: None
+    node.select_query_cluster = lambda candidates, **kwargs: selections.append(
+        (candidates, kwargs))
+    node.get_logger = lambda: type(
+        'Logger', (), {'warn': lambda self, message: None})()
+    message = Float32MultiArray()
+    message.layout.dim = [MultiArrayDimension(
+        label='query:red car', size=2, stride=2)]
+    message.data = [1.0, 0.0]
+
+    node.query_feature_cb(message)
+
+    assert selections == []
+
+
+def test_query_keeps_retrying_until_safe_goal_can_be_published():
+    node = make_approach_node(np.zeros(3))
+    node.semantic_backend = 'segformer'
+    node.last_query_text = 'car'
+    node.last_query_class_idx = 1
+    node.last_query_color = None
+    node.query_retry_pending = True
+    node.projection_calibration_verified = True
+    node.voxel_map.revision = 0
+    node.query_retry_min_interval_sec = 0.0
+    node.select_class_query_target = lambda class_idx, color: (
+        {'pos': np.array([4.0, 0.0, 0.0])}, 1, 0, 0)
+    published = []
+    node._publish_query_goal = lambda *args, **kwargs: published.append(1) or True
+
+    assert not node.query_class_cb(1, log_failure=False)
+    assert node.query_retry_pending
+    assert published == []
+    node.voxel_map.add((20, 0, 0), [2.0, 0.0, 0.0], 0)
+    node.voxel_map.revision = 1
+    assert node.retry_pending_query()
+    assert published == [1]
+    assert not node.query_retry_pending
+
+
+def test_pending_query_waits_for_changed_revision_and_retry_interval():
+    node = object.__new__(GABsvmNode)
+    node.semantic_backend = 'segformer'
+    node.last_query_text = 'chair'
+    node.last_query_class_idx = 1
+    node.last_query_color = None
+    node.query_retry_pending = True
+    node.voxel_map = type('Map', (), {'revision': 4})()
+    node.query_retry_min_interval_sec = 1.0
+    node._last_query_retry_map_revision = 4
+    node._last_query_retry_time_sec = 10.0
+    now = [10.5]
+    node.get_clock = lambda: type(
+        'Clock',
+        (),
+        {'now': lambda self: type(
+            'Now', (), {'nanoseconds': int(now[0] * 1e9)})()},
+    )()
+    calls = []
+    node.query_class_cb = lambda *args, **kwargs: calls.append(True) or True
+
+    assert not node.retry_pending_query()
+    now[0] = 11.1
+    assert not node.retry_pending_query()
+    node.voxel_map.revision = 5
+    assert node.retry_pending_query()
+    assert calls == [True]
+
+
+def test_clip_frame_products_must_share_exact_source_header():
+    first = Header()
+    first.stamp.sec = 10
+    first.frame_id = 'camera'
+    second = Header()
+    second.stamp.sec = 11
+    second.frame_id = 'camera'
+
+    assert GABsvmNode._same_image_header(first, first)
+    assert not GABsvmNode._same_image_header(first, second)
+
+
+def test_approach_allows_candidate_at_obstacle_xy():
+    node = make_approach_node(np.array([0.0, 0.0, 0.0]))
+    node.voxel_map.add((1, 0, 0), [2.0, 0.0, 0.0], 0)
+    node.voxel_map.add((1, 0, 1), [2.0, 0.0, 0.5], 1)
+    key, position = node.find_approach_goal(np.array([4.0, 0.0, 0.0]), 1)
+    assert key == (1, 0, 0)
+    assert 'candidate_clearance_rejected' not in node._last_approach_diagnostics
+
+
+def test_approach_snapshot_excludes_far_voxels_before_semantic_work():
+    node = make_approach_node(np.zeros(3))
+    node.voxel_map.add((20, 0, 0), [2.0, 0.0, 0.0], 0)
+    node.voxel_map.add((60, 0, 0), [6.0, 0.0, 0.0], 0)
+    node.voxel_map.add((900, 0, 0), [90.0, 0.0, 0.0], 0)
+    calls = []
+    original = node.voxel_map.get_probabilities
+
+    def probabilities(key):
+        calls.append(key)
+        return original(key)
+
+    node.voxel_map.get_probabilities = probabilities
+    snapshot = node._build_query_approach_snapshot(
+        (np.array([4.0, 0.0, 0.0]), np.array([8.0, 0.0, 0.0])))
+    assert calls == [(20, 0, 0), (60, 0, 0)]
+    assert len(snapshot.voxels) == 2
+    node.voxel_map.voxels[(20, 0, 0)]['pos'][0] = 99.0
+    assert snapshot.voxels[0].position[0] == 2.0
+    assert not snapshot.voxels[0].position.flags.writeable

@@ -1,0 +1,137 @@
+schema_version: 1
+scenario_id: aws_small_house
+world: aws_small_house
+world_package: go2_config
+world_file: aws_robomaker/small_house/worlds/small_house.world
+source_repository: https://github.com/aws-robotics/aws-robomaker-small-house-world
+source_commit: ff9631ca6d1db9c1ba656498151464b5ab74aafe
+ontology_profile: indoor7
+model_id: nvidia/segformer-b0-finetuned-ade-512-512
+model_revision: 489d5cd81a0b59fab9b7ea758d3548ebe99677da
+gt_frame: world
+gt_reference: sdf_top_level_model_origin
+# Coordinates are model origins, not measured mesh centers or visible surface clusters.
+# Each six-value pose is x/y/z/roll/pitch/yaw copied from the named top-level SDF model.
+targets:
+  - id: chaira_01_001
+    class: chair
+    gazebo_model: ChairA_01_001
+    asset: model://aws_robomaker_residential_ChairA_01
+    pose: [7.11516, 0.209028, 0.024685, 0.000001, 0.0, -1.55607]
+  - id: chaira_01_002
+    class: chair
+    gazebo_model: ChairA_01_002
+    asset: model://aws_robomaker_residential_ChairA_01
+    pose: [6.25506, 0.219468, 0.011308, 0.0, 0.0, -1.50414]
+  - id: chaira_01_003
+    class: chair
+    gazebo_model: ChairA_01_003
+    asset: model://aws_robomaker_residential_ChairA_01
+    pose: [6.06678, 1.68075, 0.01, 0.0, 0.0, 1.56986]
+  - id: chaira_01_004
+    class: chair
+    gazebo_model: ChairA_01_004
+    asset: model://aws_robomaker_residential_ChairA_01
+    pose: [7.00277, 1.67074, 0.0, 0.0, 0.0, 1.52363]
+  - id: chaira_01_005
+    class: chair
+    gazebo_model: ChairA_01_005
+    asset: model://aws_robomaker_residential_ChairA_01
+    pose: [-8.27094, 1.91665, 0.03665, 0.0, 0.0, 0.0]
+  - id: chaird_01_001
+    class: chair
+    gazebo_model: ChairD_01_001
+    asset: model://aws_robomaker_residential_ChairD_01
+    pose: [-1.380775, 4.104456, 0.0, 0.0, 0.0, 0.0]
+  - id: chaird_01_002
+    class: chair
+    gazebo_model: ChairD_01_002
+    asset: model://aws_robomaker_residential_ChairD_01
+    pose: [0.325214, 4.104456, 0.0, 0.0, 0.0, -3.138741]
+  - id: chaird_01_003
+    class: chair
+    gazebo_model: ChairD_01_003
+    asset: model://aws_robomaker_residential_ChairD_01
+    pose: [-8.270775, -4.504456, 0.0, 0.0, 0.0, 0.869673]
+  - id: coffeetable_01_001
+    class: table
+    gazebo_model: CoffeeTable_01_001
+    asset: model://aws_robomaker_residential_CoffeeTable_01
+    pose: [1.512301, -1.733438, 0.041983, 0.0, 0.0, 0.01]
+  - id: kitchentable_01_001
+    class: table
+    gazebo_model: KitchenTable_01_001
+    asset: model://aws_robomaker_residential_KitchenTable_01
+    pose: [6.55269, 0.951173, -0.000006, 0.0, 0.0, -1.56413]
+  - id: balconytable_01_001
+    class: table
+    gazebo_model: BalconyTable_01_001
+    asset: model://aws_robomaker_residential_BalconyTable_01
+    pose: [-0.55624, 4.111241, 0.0, 0.0, 0.0, 0.0]
+
+robot_starts:
+  - id: kitchen_view
+    # x/y/yaw in Gazebo world. Start validation is a run case, not source data.
+    pose: [3.5, 1.0, 0.0]
+    spawn_height_m: 0.35
+  - id: kitchen_close_view
+    # Stable view toward the dining set; validate with the matching case first.
+    pose: [5.0, 2.4, -1.0]
+    spawn_height_m: 0.35
+  - id: dining_southeast_view
+    # Stable view of the less-occluded southeast side of the dining chairs.
+    pose: [8.0, -0.8, 2.35]
+    spawn_height_m: 0.35
+
+cases:
+  - id: validate_kitchen_close
+    start: kitchen_close_view
+    expected: start_validation
+  - id: validate_dining_southeast
+    start: dining_southeast_view
+    expected: start_validation
+  - id: chair_kitchen
+    start: kitchen_close_view
+    query: chair
+    target_class: chair
+    expected: navigation_success
+    instance_policy: nearest_same_class_gt
+  - id: table_kitchen
+    start: kitchen_close_view
+    query: table
+    target_class: table
+    expected: navigation_success
+    instance_policy: nearest_same_class_gt
+  - id: floor_nonqueryable
+    start: kitchen_view
+    query: floor
+    expected: no_target_or_goal
+    query_status: nonqueryable
+  - id: bed_absent_control
+    world_file: aws_robomaker/small_house/worlds/small_house_no_bed.world
+    start: kitchen_view
+    query: bed
+    expected: no_target_or_goal
+    query_status: accepted
+    world_absent_assets:
+      - model://aws_robomaker_residential_Bed_01
+  - id: car_outside_profile
+    start: kitchen_view
+    query: car
+    expected: no_target_or_goal
+    query_status: unresolved
+  - id: table_unsupported_checkpoint
+    start: kitchen_view
+    query: table
+    model_id: nvidia/segformer-b0-finetuned-cityscapes-1024-1024
+    model_revision: 21b3847fae21ddee674abd31129307b6a1235bd9
+    expected: no_target_or_goal
+    query_status: unsupported
+
+seed: 7
+startup_timeout_wall_sec: 180.0
+# Class-level smoke tolerance to model origins; not a surface/center accuracy claim.
+target_origin_tolerance_xy_m: 1.5
+warmup_sim_sec: 15.0
+query_timeout_wall_sec: 120.0
+negative_observation_wall_sec: 15.0

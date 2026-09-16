@@ -15,6 +15,7 @@ setup(
         ('share/' + package_name, ['package.xml']),
         (os.path.join('share', package_name, 'config'), glob('config/*.yaml')),
         (os.path.join('share', package_name, 'launch'), glob('launch/*.py')),
+        (os.path.join('share', package_name, 'benchmark'), glob('benchmark/*.yaml')),
     ],
     install_requires=[
         'setuptools',
@@ -25,6 +26,7 @@ setup(
         'scipy',
         'Pillow',
         'PyYAML',
+        'psutil',
     ],
     zip_safe=True,
     maintainer='yk',
@@ -49,9 +51,12 @@ setup(
     },
     entry_points={
         'console_scripts': [
+            'planar_odom_velocity = semantic_mapping.runtime.planar_odom_velocity:main',
             'clip_node = semantic_mapping.runtime.clip_node:main',
             'segformer_node = semantic_mapping.runtime.segformer_node:main',
             'segformer_image = semantic_mapping.runtime.segformer_image:main',
+            'sim_sensor_gate = semantic_mapping.runtime.simulation_startup:main',
+            'run_indoor_semantic_benchmark = semantic_mapping.gazebo.indoor_benchmark:main',
             'segformer_dataset = '
             'semantic_mapping.runtime.segformer_training:dataset_main',
             'segformer_finetune = '
@@ -63,7 +68,10 @@ setup(
             'semantic_mapping.runtime.nav_goal_bridge_node:main',
             'active_perception_node = '
             'semantic_mapping.runtime.active_perception_node:main',
+            'lite3_odom_bridge_node = '
+            'semantic_mapping.runtime.lite3_odom_bridge_node:main',
             'clip_query = semantic_mapping.runtime.clip_query:main',
+            'semantic_query = semantic_mapping.runtime.clip_query:main',
             'carla_capture_benchmark = '
             'semantic_mapping.carla.carla_capture_benchmark:main',
             'carla_evaluate_benchmark = '

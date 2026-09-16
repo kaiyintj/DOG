@@ -14,13 +14,8 @@ from pathlib import Path
 import numpy as np
 from PIL import Image
 
-from semantic_mapping.runtime.segformer_core import (
-    PROJECT_CLASSES,
-    PROJECT_COLORS,
-    aggregate_project_probability_tensor,
-    build_project_lookup,
-    find_supported_project_classes,
-)
+from semantic_mapping.runtime.segformer_core import PROJECT_COLORS
+from semantic_mapping.runtime.semantic_profile import open_profile
 
 
 def _parse_watch_labels(values):
@@ -30,10 +25,10 @@ def _parse_watch_labels(values):
     return [label for label in labels if label]
 
 
-def _project_statistics(project_mask, confidence, top_k):
+def _project_statistics(project_mask, confidence, top_k, classes):
     pixel_count = int(project_mask.size)
     counts = np.bincount(
-        project_mask.reshape(-1), minlength=len(PROJECT_CLASSES))
+        project_mask.reshape(-1), minlength=len(classes))
     ranked_ids = np.argsort(counts)[::-1]
     entries = []
     for class_id in ranked_ids:
@@ -43,7 +38,7 @@ def _project_statistics(project_mask, confidence, top_k):
         selected = project_mask == class_id
         entries.append({
             'id': int(class_id),
-            'label': PROJECT_CLASSES[int(class_id)],
+            'label': classes[int(class_id)],
             'count': count,
             'fraction': count / max(pixel_count, 1),
             'mean_confidence': float(np.mean(confidence[selected])),
@@ -56,8 +51,8 @@ def _project_statistics(project_mask, confidence, top_k):
     }
 
 
-def _overlay(rgb_image, project_mask, alpha=0.48):
-    colors = PROJECT_COLORS[project_mask].astype(np.float32)
+def _overlay(rgb_image, project_mask, alpha=0.48, colors=PROJECT_COLORS):
+    colors = np.asarray(colors)[project_mask].astype(np.float32)
     source = np.asarray(rgb_image, dtype=np.float32)
     blended = source * (1.0 - alpha) + colors * alpha
     return np.clip(blended, 0, 255).astype(np.uint8)
@@ -107,8 +102,10 @@ def infer_image(
     confidence_threshold=0.45,
     posterior_temperature=1.0,
     top_k=8,
+    ontology_profile='outdoor13',
 ):
     """Return project mask, confidence map and a JSON-serializable summary."""
+    profile = open_profile(ontology_profile)
     image_path = Path(image_path).expanduser().resolve()
     if not image_path.is_file():
         raise FileNotFoundError(f'Image does not exist: {image_path}')
@@ -118,6 +115,7 @@ def infer_image(
 
     torch, functional, processor, model, device, id2label = _load_model(
         model_id, device, use_fp16)
+    profile = open_profile(profile.id, id2label)
     posterior_temperature = float(posterior_temperature)
     if not np.isfinite(posterior_temperature) or posterior_temperature <= 0.0:
         raise ValueError('posterior_temperature must be finite and positive')
@@ -139,17 +137,7 @@ def infer_image(
             native_logits / posterior_temperature,
             dim=1,
         )
-        project_lookup = build_project_lookup(id2label)
-        project_lookup_tensor = torch.as_tensor(
-            project_lookup,
-            dtype=torch.long,
-            device=raw_native_probabilities.device,
-        )
-        project_native_probabilities = aggregate_project_probability_tensor(
-            raw_native_probabilities,
-            project_lookup_tensor,
-            len(PROJECT_CLASSES),
-        )
+        project_native_probabilities = profile.project_probabilities(raw_native_probabilities)
         project_probabilities = functional.interpolate(
             project_native_probabilities,
             size=(height, width),
@@ -175,20 +163,22 @@ def infer_image(
     confidence_map = confidence[0].cpu().numpy().astype(np.float32)
     project_mask = project_prediction[0].cpu().numpy().astype(np.uint8)
     project_mask[confidence_map < float(np.clip(
-        confidence_threshold, 0.0, 1.0))] = len(PROJECT_CLASSES) - 1
+        confidence_threshold, 0.0, 1.0))] = profile.unknown_id
 
     summary = {
         'image': str(image_path),
         'model': model_id,
+        'ontology_profile': profile.id,
+        'project_classes': list(profile.classes),
         'device': device,
         'confidence_threshold': float(confidence_threshold),
         'posterior_temperature': posterior_temperature,
         'probability_mapping': 'aggregate_before_argmax',
         'image_size': [int(width), int(height)],
         'checkpoint_labels': id2label,
-        'supported_project_classes': list(
-            find_supported_project_classes(id2label)),
-        'project': _project_statistics(project_mask, confidence_map, top_k),
+        'supported_project_classes': [
+            profile.classes[index] for index in sorted(profile.supported_ids)],
+        'project': _project_statistics(project_mask, confidence_map, top_k, profile.classes),
     }
     return rgb_image, project_mask, raw_mask, confidence_map, summary
 
@@ -197,6 +187,9 @@ def _build_parser():
     parser = argparse.ArgumentParser(
         description='Run the project SegFormer model on a local image.')
     parser.add_argument('--image', required=True, help='Input JPG/PNG image.')
+    parser.add_argument(
+        '--ontology-profile', choices=('outdoor13', 'indoor7'), default='outdoor13',
+        help='Project label/role profile; the selected checkpoint must supply its labels.')
     parser.add_argument(
         '--model-id',
         default='nvidia/segformer-b0-finetuned-cityscapes-1024-1024',
@@ -218,7 +211,7 @@ def _build_parser():
         help='Optional path for an RGB segmentation overlay.')
     parser.add_argument(
         '--mask', type=Path,
-        help='Optional path for the 13-class project mask (mono8).')
+        help='Optional path for the selected profile project mask (mono8).')
     parser.add_argument(
         '--json', dest='json_path', type=Path,
         help='Optional path for the JSON result.')
@@ -235,12 +228,14 @@ def main(argv=None):
         confidence_threshold=args.confidence_threshold,
         posterior_temperature=args.posterior_temperature,
         top_k=args.top_k,
+        ontology_profile=args.ontology_profile,
     )
 
     if args.overlay:
         args.overlay.parent.mkdir(parents=True, exist_ok=True)
         Image.fromarray(
-            _overlay(rgb, project_mask), mode='RGB').save(args.overlay)
+            _overlay(rgb, project_mask, colors=open_profile(args.ontology_profile).colors),
+            mode='RGB').save(args.overlay)
         summary['overlay'] = str(args.overlay.resolve())
     if args.mask:
         args.mask.parent.mkdir(parents=True, exist_ok=True)

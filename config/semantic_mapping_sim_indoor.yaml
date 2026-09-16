@@ -1,0 +1,198 @@
+# Go2 Gazebo only. Reuses simulated sensor extrinsics and the existing command chain.
+# Indoor class IDs/colors/costs/extents come from semantic_profile; no duplicated schema.
+# ADE20K labels support Indoor-7; AWS-world accuracy and approach tuning need acceptance.
+segformer_node:
+  ros__parameters:
+    ontology_profile: "indoor7"
+    model_id: "nvidia/segformer-b0-finetuned-ade-512-512"
+    device: "auto"
+    use_fp16: true
+    inference_interval_sec: 0.5
+    confidence_threshold: 0.45
+    # Calibration hook. Keep 1.0 until a disjoint calibration split is fitted.
+    posterior_temperature: 1.0
+    require_electric_bicycle_training_acceptance: true
+    electric_bicycle_min_target_iou: 0.30
+    electric_bicycle_min_iou: 0.35
+    electric_bicycle_min_road_iou: 0.50
+    image_topic: "/d435i/image_raw"
+    image_is_compressed: false
+    image_encoding: "rgb8"
+    class_mask_topic: "/segformer/class_mask"
+    raw_class_mask_topic: "/segformer/raw_class_mask"
+    confidence_topic: "/segformer/confidence"
+    project_posterior_topic: "/segformer/project_posterior"
+    color_mask_topic: "/segformer/color_mask"
+    source_image_topic: "/segformer/source_image"
+    log_every_n: 10
+    debug_log_raw_predictions: true
+    debug_raw_top_k: 8
+    debug_watch_labels: ["floor", "wall", "door", "chair", "table", "shelf", "bed"]
+    debug_roi_xywh_normalized: [0.0, 0.0, 0.0, 0.0]
+
+ga_bsvm_node:
+  ros__parameters:
+    ontology_profile: "indoor7"
+    pointcloud_topic: "/livox/lidar"
+    pointcloud_type: "livox_custom"
+    pointcloud_frame: "mid360_link"
+    tf_buffer_cache_sec: 30.0
+    tf_lookup_timeout_sec: 0.2
+    tf_retry_queue_size: 8
+    tf_retry_period_sec: 0.05
+    tf_retry_max_age_sec: 3.0
+    image_topic: "/d435i/image_raw"
+    image_is_compressed: false
+    image_encoding: "rgb8"
+    camera_info_topic: ""
+    use_camera_info: false
+    require_camera_info: false
+    require_zero_distortion: false
+    projection_calibration_verified: true
+    imu_topic: "/imu/data"
+    semantic_backend: "segformer"
+    clip_frame_topic: "/clip/frame"
+    clip_source_image_topic: "/clip/source_image"
+    segformer_class_mask_topic: "/segformer/class_mask"
+    segformer_confidence_topic: "/segformer/confidence"
+    segformer_use_full_posterior: true
+    segformer_project_posterior_topic: "/segformer/project_posterior"
+    segformer_source_image_topic: "/segformer/source_image"
+    segformer_unknown_probability_floor: 0.5
+    text_query_topic: "/text_query"
+    query_feature_topic: "/query_feature"
+    semantic_cloud_topic: "/semantic_cloud"
+    uncertainty_cloud_topic: "/uncertainty_cloud"
+    entropy_topic: "/voxel_entropy_data"
+    goal_pose_topic: "/goal_pose"
+    query_target_pose_topic: "/query_target_pose"
+    # Legacy debug map is disabled by default and must never compete with a
+    # Nav2 map server or SLAM publisher on /map.
+    map_topic: "/legacy_semantic_map"
+    legacy_map_publish_enabled: false
+    semantic_cost_map_topic: "/semantic_cost_map"
+    odom_frame: "odom"
+    base_frame: "base_link"
+    grid_rows: 4
+    grid_cols: 6
+    feat_dim: 512
+    voxel_size: 0.1
+    evidence_prior: 1.0
+    evidence_strength: 1.0
+    evidence_decay: 0.995
+    evidence_decay_reference_sec: 0.1
+    max_frame_evidence: 3.0
+    max_total_evidence: 200.0
+    # 0 derives a finite feature/color EMA cap from max_total_evidence.
+    max_observation_weight: 0.0
+    dynamic_voxel_ttl_sec: 10.0
+    voxel_ttl_sec: 300.0
+    voxel_prune_period_sec: 2.0
+    voxel_prune_radius_m: 30.0
+    voxel_max_count: 250000
+    uncertainty_entropy_weight: 0.7
+    query_min_weight_sum: 2.0
+    query_min_class_prob: 0.25
+    query_require_class_argmax: true
+    query_min_similarity: 0.18
+    query_feature_weight: 0.7
+    query_class_weight: 0.3
+    query_color_weight: 0.35
+    query_min_color_score: 0.2
+    query_min_color_support_ratio: 0.3
+    query_allow_feature_fallback: false
+    query_approach_radius_m: 1.8
+    query_approach_distance_m: 1.0
+    query_approach_min_distance_m: 0.6
+    query_approach_min_confidence: 0.15
+    query_require_safe_approach: true
+    query_prefer_robot_side: true
+    # Prefer a robot-side approach when one exists, but do not reject every
+    # candidate when the semantic map only observes the object from the other
+    # side. The Nav2 geometric costmaps remain the final path feasibility check.
+    query_require_robot_side: false
+    # The simulated quadruped follows the approach path more reliably when
+    # its final heading is tangent to that path instead of forcing a 180-degree
+    # in-place turn just to face the chair. Real profiles keep target-facing.
+    query_face_target: false
+    query_same_side_min_cosine: 0.0
+    query_robot_distance_weight: 0.15
+    query_require_robot_pose_for_approach: true
+    query_cluster_radius_m: 0.45
+    query_cluster_min_voxels: 3
+    query_cluster_min_evidence: 3.0
+    query_cluster_support_weight: 0.08
+    query_distance_weight: 0.01
+    query_max_candidates: 5000
+    query_fallback_max_attempts: 2
+    query_retry_min_interval_sec: 1.0
+    cost_map_size_m: 50.0
+    costmap_min_confidence: 0.15
+    costmap_robot_clearance_m: 0.4
+    costmap_min_height_m: -0.6
+    costmap_max_height_m: 1.0
+    sync_queue_size: 10
+    sync_slop: 0.2
+    process_every_n_frames: 5
+    segformer_process_every_n_frames: 1
+    entropy_publish_every_n_processed: 2
+    cloud_publish_every_n_processed: 10
+    segformer_cloud_publish_every_n_processed: 1
+    imu_window_sec: 0.15
+    motion_angular_scale: 2.0
+    motion_accel_scale: 3.0
+    # Motion V2 validation parameters: camera-pose change between RGB/LiDAR
+    # timestamps. These are experimental, not frozen real-robot parameters.
+    motion_rotation_scale_rad: 0.05
+    motion_translation_scale_m: 2.0
+    motion_min_reliability: 0.2
+    motion_missing_reliability: 0.2
+    imu_acceleration_scale: 1.0
+    imu_gravity: 9.81
+    density_scale: 8.0
+    range_scale_m: 20.0
+    view_edge_penalty: 0.0
+    semantic_confidence_floor: 0.15
+    camera_k: [457.02, 0.0, 320.0, 0.0, 457.02, 240.0, 0.0, 0.0, 1.0]
+    lidar_to_camera_translation: [0.0, 0.06, -0.20]
+    lidar_to_camera_quaternion: [0.5, -0.5, 0.5, 0.5]
+
+active_perception_node:
+  ros__parameters:
+    ontology_profile: "indoor7"
+    lookahead_dist: 2.0
+    search_radius: 0.5
+    # 0.0 derives H_max as ln(num_classes), avoiding schema drift.
+    h_max: 0.0
+    min_speed_ratio: 0.3
+    unknown_speed_ratio: 0.65
+    linear_deadband: 0.01
+    angular_deadband: 0.03
+    uncertainty_ema_gain: 0.2
+    uncertainty_percentile: 90.0
+    uncertainty_percentile_weight: 0.35
+    # Preserve the former 0.08 step at Nav2's 20 Hz smoother rate.
+    max_scale_rate_per_sec: 1.6
+    # Deprecated compatibility fallback; the rate-per-second limit above is used.
+    max_scale_step: 0.08
+    legacy_cmd_rate_hz: 20.0
+    preserve_command_curvature: true
+    scale_angular_velocity: true
+    angular_min_speed_ratio: 0.3
+    plan_topic: "/plan"
+    entropy_topic: "/voxel_entropy_data"
+    nav_cmd_vel_topic: "/cmd_vel"
+    cmd_vel_topic: "/cmd_vel_champ"
+    path_entropy_topic: "/path_entropy"
+    perception_mode_topic: "/perception_mode"
+    speed_scale_topic: "/semantic_speed_scale"
+    odom_frame: "odom"
+    base_frame: "base_link"
+    plan_max_age_sec: 2.0
+    entropy_max_age_sec: 2.5
+    imu_topic: "/imu/data"
+    imu_max_age_sec: 0.5
+    require_fresh_imu: true
+    freshness_future_tolerance_sec: 0.1
+    cmd_vel_timeout_sec: 0.25
+    watchdog_period_sec: 0.05

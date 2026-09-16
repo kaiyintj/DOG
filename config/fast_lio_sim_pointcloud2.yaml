@@ -1,0 +1,55 @@
+/**:
+    ros__parameters:
+        # Gazebo-only FAST-LIO preset.  The Livox simulation plugin publishes
+        # /livox/lidar_PointCloud2 with x/y/z/intensity fields.  The generic
+        # PointCloud2 parser does not require the synthetic CustomMsg timing
+        # fields that made the simulated odometry diverge after turns.
+        feature_extract_enable: false
+        point_filter_num: 3
+        max_iteration: 3
+        filter_size_surf: 0.5
+        filter_size_map: 0.5
+        cube_side_length: 1000.0
+        runtime_pos_log_enable: false
+        map_file_path: "./test.pcd"
+
+        common:
+            lid_topic: "/livox/lidar_PointCloud2"
+            imu_topic: "/imu/data"
+            time_sync_en: false
+            time_offset_lidar_to_imu: 0.0
+
+        preprocess:
+            # FAST-LIO's generic PointCloud2 handler.  Values 1 and 4 select
+            # Livox-specific handlers and expect CustomMsg/tag fields.
+            lidar_type: 0
+            scan_line: 1
+            blind: 0.5
+            timestamp_unit: 3
+            scan_rate: 10
+
+        mapping:
+            acc_cov: 0.1
+            gyr_cov: 0.1
+            b_acc_cov: 0.0001
+            b_gyr_cov: 0.0001
+            fov_degree: 360.0
+            det_range: 100.0
+            # The URDF gives the simulated sensor extrinsics exactly.
+            extrinsic_est_en: false
+            extrinsic_T: [0.10, 0.0, 0.08]
+            extrinsic_R: [1.0, 0.0, 0.0,
+                          0.0, 1.0, 0.0,
+                          0.0, 0.0, 1.0]
+
+        publish:
+            path_en: true
+            effect_map_en: false
+            map_en: true
+            scan_publish_en: true
+            dense_publish_en: false
+            scan_bodyframe_pub_en: true
+
+        pcd_save:
+            pcd_save_en: true
+            interval: -1

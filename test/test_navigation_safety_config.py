@@ -140,6 +140,14 @@ def test_nav2_progress_checker_matches_deliberate_slowdown():
     assert controller['FollowPath']['BaseObstacle.scale'] >= 0.2
 
 
+def test_simulation_goal_checker_ignores_drifting_yaw():
+    params = load_yaml('config/nav2_sim_params.yaml')
+    checker = params['controller_server']['ros__parameters']['general_goal_checker']
+    assert checker['plugin'] == 'nav2_controller::PositionGoalChecker'
+    assert checker['xy_goal_tolerance'] <= 0.30
+    assert 'yaw_goal_tolerance' not in checker
+
+
 def test_simulation_requires_verified_robot_side_approach():
     params = load_yaml('config/semantic_mapping_sim_livox.yaml')
     clip = params['clip_node']['ros__parameters']
@@ -158,7 +166,7 @@ def test_simulation_requires_verified_robot_side_approach():
     assert mapping['query_require_safe_approach'] is True
     assert mapping['query_require_robot_side'] is True
     assert mapping['query_require_robot_pose_for_approach'] is True
-    assert mapping['query_path_clearance_radius_m'] >= 0.65
+    assert 'query_path_clearance_radius_m' not in mapping
     assert mapping['tf_retry_queue_size'] >= 5
     assert mapping['tf_retry_max_age_sec'] >= 2.5
     assert active['preserve_command_curvature'] is True
@@ -176,11 +184,22 @@ def test_lite3_profile_fails_closed_until_calibration_and_bridge_are_ready():
     assert mapping['require_camera_info'] is True
     assert mapping['require_zero_distortion'] is True
     assert mapping['projection_calibration_verified'] is False
+    assert mapping['lidar_to_camera_translation'] == [
+        0.03541400632660336,
+        0.41457697624860806,
+        -0.1046040335091429,
+    ]
+    assert mapping['lidar_to_camera_quaternion'] == [
+        0.585917353743501,
+        -0.5934590870789174,
+        0.388658516840907,
+        0.39172914600868997,
+    ]
     assert mapping['query_require_safe_approach'] is True
     assert mapping['query_require_robot_side'] is True
     assert mapping['query_require_robot_pose_for_approach'] is True
     assert mapping['query_approach_min_distance_m'] >= 1.2
-    assert mapping['query_path_clearance_radius_m'] >= 0.65
+    assert 'query_path_clearance_radius_m' not in mapping
     assert mapping['imu_acceleration_scale'] == 9.80665
     assert active['nav_cmd_vel_topic'] == '/cmd_vel'
     assert active['cmd_vel_topic'] == '/cmd_vel_lite3_safe'
@@ -244,6 +263,16 @@ def test_nav_launch_starts_one_profile_selected_active_perception_gate():
     assert 'active_perception_params_file,' in launch_source
 
 
+def test_nav_launch_keeps_custom_bridge_as_only_goal_action_writer():
+    launch_source = (
+        PROJECT_ROOT / 'launch' / 'nav_with_remap.launch.py'
+    ).read_text(encoding='utf-8')
+
+    assert 'GroupAction([' in launch_source
+    assert "SetRemap(src='/goal_pose', dst='/nav2_internal_goal_pose')" in launch_source
+    assert "executable='nav_goal_bridge_node'" in launch_source
+
+
 def test_nav_launch_defaults_match_lite3_wall_time_and_split_profiles():
     core_source = (
         PROJECT_ROOT / 'launch' / 'nav_with_remap.launch.py'
@@ -262,3 +291,18 @@ def test_nav_launch_defaults_match_lite3_wall_time_and_split_profiles():
     assert 'semantic_mapping_lite3_real.yaml' in real_source
     assert "default_value='/Odometry'" in real_source
     assert "default_value='false'" in real_source
+
+
+def test_simulation_nav_profile_keeps_local_obstacles_and_semantic_global_standoff():
+    params = load_yaml('config/nav2_sim_params.yaml')
+    controller = params['controller_server']['ros__parameters']
+    local = params['local_costmap']['local_costmap']['ros__parameters']
+    global_map = params['global_costmap']['global_costmap']['ros__parameters']
+    sim_source = (
+        PROJECT_ROOT / 'launch' / 'nav_sim.launch.py'
+    ).read_text(encoding='utf-8')
+
+    assert "'nav2_sim_params.yaml'" in sim_source
+    assert controller['FollowPath']['use_collision_detection'] is False
+    assert local['plugins'] == ['voxel_layer', 'inflation_layer']
+    assert global_map['plugins'] == ['semantic_layer', 'inflation_layer']

@@ -81,6 +81,9 @@ class VoxelMap:
                 f'class_colors has {len(configured_colors)} entries, expected at least {self.K}')
         self.class_colors = configured_colors[:self.K]
         self.voxels = {}
+        # Monotonic map revision used by query retries.  It changes only after
+        # an update or pruning pass has had a chance to mutate map state.
+        self.revision = 0
 
     def get_voxel_indices(self, point):
         """Convert a 3D point to integer voxel coordinates."""
@@ -336,7 +339,7 @@ class VoxelMap:
         frame_updates = {}
         for index, point in enumerate(points):
             weight = float(np.clip(reliability[index], 0.0, 1.0))
-            if weight < 1e-3:
+            if not np.isfinite(weight) or weight < 1e-3:
                 continue
 
             key = self.get_voxel_indices(point)
@@ -484,6 +487,8 @@ class VoxelMap:
             )
             voxel['observation_count'] += 1
 
+        if new_count or updated_count:
+            self.revision += 1
         return new_count, updated_count
 
     def prune(
@@ -621,6 +626,10 @@ class VoxelMap:
                 counts[reason] += 1
         counts['total'] = int(sum(counts.values()))
         counts['remaining'] = len(self.voxels)
+        if snapshot:
+            # Pruning also advances continuous-time decay, so a non-empty
+            # pruning pass is a map change even when no key is removed.
+            self.revision += 1
         return counts
 
     def get_visualization_clouds(self):

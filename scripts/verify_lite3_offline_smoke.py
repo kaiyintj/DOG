@@ -29,6 +29,8 @@ OUTPUT_TOPICS = {
     '/cloud_registered': 'sensor_msgs/msg/PointCloud2',
     '/clip_logits': 'std_msgs/msg/Float32MultiArray',
     '/clip_features': 'std_msgs/msg/Float32MultiArray',
+    '/clip/frame': 'sensor_msgs/msg/Image',
+    '/clip/source_image': 'sensor_msgs/msg/Image',
     '/query_feature': 'std_msgs/msg/Float32MultiArray',
     '/semantic_cloud': 'sensor_msgs/msg/PointCloud2',
     '/uncertainty_cloud': 'sensor_msgs/msg/PointCloud2',
@@ -470,6 +472,29 @@ def _stamp_ns(message):
     return int(stamp.sec) * 1000000000 + int(stamp.nanosec)
 
 
+def _header_key(message):
+    """Return the timestamp and frame identity used for atomic pairing."""
+    return (_stamp_ns(message), str(message.header.frame_id))
+
+
+def _paired_header_count(left, right):
+    """Count Header pairs without double-counting duplicate timestamps."""
+    return sum((Counter(left) & Counter(right)).values())
+
+
+def _clip_header_pairing_valid(frame_headers, source_headers):
+    """Accept complete CLIP/RGB pairing with one recorder-boundary allowance."""
+    frame_count = len(frame_headers)
+    source_count = len(source_headers)
+    paired_count = _paired_header_count(frame_headers, source_headers)
+    return (
+        frame_count >= 10
+        and source_count >= 10
+        and abs(frame_count - source_count) <= 1
+        and paired_count >= min(frame_count, source_count) - 1
+    )
+
+
 def _finite(values):
     return all(math.isfinite(float(value)) for value in values)
 
@@ -511,6 +536,20 @@ def inspect_runtime_bag(output_bag):
         },
         'clouds': {},
         'arrays': {},
+        'clip_frames': {
+            'count': 0,
+            'invalid_layout_count': 0,
+            'non_finite_count': 0,
+            'invalid_feature_norm_count': 0,
+            'zero_stamp_count': 0,
+            'headers': [],
+        },
+        'clip_source_images': {
+            'count': 0,
+            'invalid_layout_count': 0,
+            'zero_stamp_count': 0,
+            'headers': [],
+        },
         'costmaps': {
             'count': 0,
             'valid_count': 0,
@@ -764,6 +803,55 @@ def _inspect_runtime_message(state, topic_name, message):
                 'non_finite_xyz_points']
         return
 
+    if topic_name == '/clip/frame':
+        item = state['clip_frames']
+        item['count'] += 1
+        stamp_ns = _stamp_ns(message)
+        item['headers'].append(_header_key(message))
+        if stamp_ns == 0:
+            item['zero_stamp_count'] += 1
+        channel_count = 13 + 512
+        expected_step = int(message.width) * channel_count * 4
+        expected_bytes = int(message.height) * expected_step
+        layout_valid = (
+            message.encoding == f'32FC{channel_count}'
+            and int(message.width) == 4
+            and int(message.height) == 3
+            and int(message.step) == expected_step
+            and len(message.data) == expected_bytes
+        )
+        if not layout_valid:
+            item['invalid_layout_count'] += 1
+            return
+        dtype = np.dtype('>f4' if message.is_bigendian else '<f4')
+        values = np.frombuffer(bytes(message.data), dtype=dtype).reshape(
+            3, 4, channel_count)
+        if not np.all(np.isfinite(values)):
+            item['non_finite_count'] += 1
+            return
+        feature_norms = np.linalg.norm(values[..., 13:], axis=2)
+        item['invalid_feature_norm_count'] += int(np.count_nonzero(
+            (feature_norms < 0.95) | (feature_norms > 1.05)))
+        return
+
+    if topic_name == '/clip/source_image':
+        item = state['clip_source_images']
+        item['count'] += 1
+        stamp_ns = _stamp_ns(message)
+        item['headers'].append(_header_key(message))
+        if stamp_ns == 0:
+            item['zero_stamp_count'] += 1
+        layout_valid = (
+            message.encoding == 'rgb8'
+            and int(message.width) > 0
+            and int(message.height) > 0
+            and int(message.step) == int(message.width) * 3
+            and len(message.data) == int(message.height) * int(message.step)
+        )
+        if not layout_valid:
+            item['invalid_layout_count'] += 1
+        return
+
     if topic_name in {
         '/clip_logits',
         '/clip_features',
@@ -779,6 +867,7 @@ def _inspect_runtime_message(state, topic_name, message):
             'invalid_length_count': 0,
             'non_finite_count': 0,
             'invalid_norm_count': 0,
+            'invalid_identity_count': 0,
         })
         item['count'] += 1
         values = list(message.data)
@@ -786,26 +875,26 @@ def _inspect_runtime_message(state, topic_name, message):
             item['invalid_length_count'] += 1
         if not _finite(values):
             item['non_finite_count'] += 1
-        if (
-            topic_name == '/clip_features'
-            and len(values) == expected_length
-            and _finite(values)
-        ):
-            for index in range(0, len(values), 512):
-                norm = math.sqrt(sum(
-                    float(value) ** 2
-                    for value in values[index:index + 512]
-                ))
+        if len(values) == expected_length and _finite(values):
+            if topic_name == '/clip_features':
+                for index in range(0, len(values), 512):
+                    norm = math.sqrt(sum(
+                        float(value) ** 2
+                        for value in values[index:index + 512]
+                    ))
+                    if not 0.95 <= norm <= 1.05:
+                        item['invalid_norm_count'] += 1
+            elif topic_name == '/query_feature':
+                norm = math.sqrt(sum(float(value) ** 2 for value in values))
                 if not 0.95 <= norm <= 1.05:
                     item['invalid_norm_count'] += 1
-        elif (
-            topic_name == '/query_feature'
-            and len(values) == expected_length
-            and _finite(values)
-        ):
-            norm = math.sqrt(sum(float(value) ** 2 for value in values))
-            if not 0.95 <= norm <= 1.05:
-                item['invalid_norm_count'] += 1
+        if topic_name == '/query_feature':
+            label = message.layout.dim[0].label if message.layout.dim else ''
+            if (
+                not label.startswith('query:')
+                or not label[len('query:'):].strip()
+            ):
+                item['invalid_identity_count'] += 1
         return
 
     if topic_name == '/semantic_cost_map':
@@ -862,6 +951,7 @@ def _get_array(runtime, topic):
         'invalid_length_count': 0,
         'non_finite_count': 0,
         'invalid_norm_count': 0,
+        'invalid_identity_count': 0,
     })
 
 
@@ -1018,32 +1108,46 @@ def validate_runtime(output_bag, logs_directory, runtime_graph):
         str(path_messages),
     )
 
-    logits = _get_array(runtime, '/clip_logits')
-    features = _get_array(runtime, '/clip_features')
-    add_check(
-        result,
-        'CLIP logits',
-        logits['count'] >= 10
-        and logits['invalid_length_count'] == 0
-        and logits['non_finite_count'] == 0,
-        str(logits),
-    )
-    add_check(
-        result,
-        'CLIP features',
-        features['count'] >= 10
-        and features['invalid_length_count'] == 0
-        and features['non_finite_count'] == 0
-        and features['invalid_norm_count'] == 0,
-        str(features),
-    )
-    add_check(
-        result,
-        'CLIP output pairing',
-        abs(logits['count'] - features['count']) <= 1,
-        'logits={}, features={}'.format(
-            logits['count'], features['count']),
-    )
+    clip_frames = runtime['clip_frames']
+    atomic_clip = clip_frames['count'] > 0
+    if atomic_clip:
+        clip_sources = runtime['clip_source_images']
+        paired_headers = _paired_header_count(
+            clip_frames['headers'], clip_sources['headers'])
+        add_check(
+            result,
+            'atomic CLIP frames',
+            clip_frames['count'] >= 10
+            and clip_frames['invalid_layout_count'] == 0
+            and clip_frames['non_finite_count'] == 0
+            and clip_frames['invalid_feature_norm_count'] == 0
+            and clip_frames['zero_stamp_count'] == 0
+            and clip_sources['count'] >= 10
+            and clip_sources['invalid_layout_count'] == 0
+            and clip_sources['zero_stamp_count'] == 0
+            and _clip_header_pairing_valid(
+                clip_frames['headers'], clip_sources['headers']),
+            'frames={}, source_images={}, paired_headers={}'.format(
+                clip_frames, clip_sources, paired_headers),
+        )
+    else:
+        # Immutable smoke evidence created before the atomic frame transport
+        # remains verifiable, but new runs no longer record these topics.
+        logits = _get_array(runtime, '/clip_logits')
+        features = _get_array(runtime, '/clip_features')
+        add_check(
+            result,
+            'legacy CLIP output evidence',
+            logits['count'] >= 10
+            and features['count'] >= 10
+            and logits['invalid_length_count'] == 0
+            and features['invalid_length_count'] == 0
+            and logits['non_finite_count'] == 0
+            and features['non_finite_count'] == 0
+            and features['invalid_norm_count'] == 0
+            and abs(logits['count'] - features['count']) <= 1,
+            'logits={}, features={}'.format(logits, features),
+        )
 
     query = _get_array(runtime, '/query_feature')
     add_check(
@@ -1052,7 +1156,8 @@ def validate_runtime(output_bag, logs_directory, runtime_graph):
         query['count'] >= 1
         and query['invalid_length_count'] == 0
         and query['non_finite_count'] == 0
-        and query['invalid_norm_count'] == 0,
+        and query['invalid_norm_count'] == 0
+        and (not atomic_clip or query['invalid_identity_count'] == 0),
         str(query),
     )
 

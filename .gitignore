@@ -1,2 +1,5 @@
 __pycache__/
 *.pyc
+
+# Reproducible benchmark output is local runtime data, not source evidence.
+/benchmark_runs/

@@ -8,6 +8,7 @@ import subprocess
 from pathlib import Path
 from types import SimpleNamespace
 
+import numpy as np
 import pytest
 import yaml
 
@@ -288,14 +289,49 @@ def test_quaternion_angle_uses_shortest_sign_equivalence():
         identity, negative_identity) == 0.0
 
 
-def test_runtime_validator_accepts_13_class_lite3_logits():
-    state = {'arrays': {}}
-    message = SimpleNamespace(data=[0.0] * (3 * 4 * 13))
+def test_runtime_validator_accepts_atomic_lite3_clip_frame():
+    state = {
+        'clip_frames': {
+            'count': 0,
+            'invalid_layout_count': 0,
+            'non_finite_count': 0,
+            'invalid_feature_norm_count': 0,
+            'zero_stamp_count': 0,
+            'headers': [],
+        },
+    }
+    values = np.zeros((3, 4, 525), dtype='<f4')
+    values[..., 13] = 1.0
+    message = SimpleNamespace(
+        encoding='32FC525',
+        width=4,
+        height=3,
+        step=4 * 525 * 4,
+        data=values.tobytes(),
+        is_bigendian=False,
+        header=SimpleNamespace(
+            stamp=SimpleNamespace(sec=1, nanosec=0),
+            frame_id='camera'),
+    )
 
-    MODULE._inspect_runtime_message(state, '/clip_logits', message)
+    MODULE._inspect_runtime_message(state, '/clip/frame', message)
 
-    assert state['arrays']['/clip_logits']['count'] == 1
-    assert state['arrays']['/clip_logits']['invalid_length_count'] == 0
+    assert state['clip_frames']['count'] == 1
+    assert state['clip_frames']['invalid_layout_count'] == 0
+    assert state['clip_frames']['invalid_feature_norm_count'] == 0
+
+
+def test_runtime_validator_pairs_clip_frame_and_source_image_headers():
+    header = (1_000_000_000, 'camera')
+
+    assert MODULE._paired_header_count(
+        [header, header], [header]) == 1
+    assert MODULE._paired_header_count(
+        [header], [(2_000_000_000, 'camera')]) == 0
+    assert MODULE._clip_header_pairing_valid(
+        [header] * 10, [header] * 10)
+    assert not MODULE._clip_header_pairing_valid(
+        [header] * 100, [header] * 10)
 
 
 def test_report_never_calls_structural_pass_motion_ready():

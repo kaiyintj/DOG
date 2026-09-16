@@ -2,11 +2,15 @@ import os
 
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
-from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription
+from launch.actions import (
+    DeclareLaunchArgument,
+    GroupAction,
+    IncludeLaunchDescription,
+)
 from launch.conditions import IfCondition
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration
-from launch_ros.actions import Node
+from launch_ros.actions import Node, SetRemap
 from nav2_common.launch import RewrittenYaml
 
 
@@ -95,13 +99,18 @@ def generate_launch_description():
             default_value='/navigate_to_pose',
             description='Nav2 NavigateToPose action name.',
         ),
-        IncludeLaunchDescription(
-            PythonLaunchDescriptionSource(nav2_launch_file),
-            launch_arguments={
-                'use_sim_time': use_sim_time,
-                'params_file': configured_params,
-            }.items(),
-        ),
+        GroupAction([
+            # Humble bt_navigator also translates /goal_pose to its action.
+            # Keep the transaction-aware bridge below as the single writer.
+            SetRemap(src='/goal_pose', dst='/nav2_internal_goal_pose'),
+            IncludeLaunchDescription(
+                PythonLaunchDescriptionSource(nav2_launch_file),
+                launch_arguments={
+                    'use_sim_time': use_sim_time,
+                    'params_file': configured_params,
+                }.items(),
+            ),
+        ]),
         Node(
             package='semantic_mapping',
             executable='active_perception_node',
