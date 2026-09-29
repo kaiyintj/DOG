@@ -393,6 +393,7 @@ class VoxelMap:
             voxel.setdefault('created_at_sec', observation_time)
             previous_observed_sec = self._stored_timestamp(
                 voxel, 'last_observed_at_sec')
+            decay_time = observation_time
             if is_new_voxel:
                 interval_scale = 1.0
             elif not explicit_timestamp:
@@ -403,28 +404,38 @@ class VoxelMap:
                     legacy_step=True,
                 )
             else:
-                self._decay_voxel_to(voxel, observation_time)
-                if (
-                    previous_observed_sec is None
-                    or observation_time < previous_observed_sec
-                ):
+                clock_rewound = (
+                    previous_observed_sec is not None
+                    and observation_time < previous_observed_sec)
+                if not clock_rewound:
+                    # Pruning can already have aged this voxel past a delayed
+                    # observation. Keep that horizon and age only the new
+                    # contribution to it; do not decay old evidence twice.
+                    last_decay = self._stored_timestamp(voxel, 'last_decay_at_sec')
+                    if last_decay is not None:
+                        decay_time = max(observation_time, last_decay)
+                self._decay_voxel_to(voxel, decay_time)
+                if previous_observed_sec is None or clock_rewound:
                     interval_scale = 1.0
                 else:
                     interval_scale = self._evidence_interval_scale(
                         observation_time - previous_observed_sec)
+                interval_scale *= self._decay_factor(decay_time - observation_time)
             voxel['last_observed_at_sec'] = observation_time
-            voxel['last_decay_at_sec'] = observation_time
+            voxel['last_decay_at_sec'] = decay_time
 
             prior = self.evidence_prior
+            observation_decay = self._decay_factor(decay_time - observation_time)
+            weight_limit = self.max_observation_weight * observation_decay
             effective_evidence = frame_evidence * interval_scale
             voxel['alpha'] += (
                 self.evidence_strength * effective_evidence * mean_probability
             ).astype(np.float32)
 
             alpha_sum = float(np.sum(voxel['alpha']))
-            if alpha_sum > self.max_total_evidence:
+            evidence_budget = (self.max_total_evidence - self.K * prior) * observation_decay
+            if alpha_sum > self.K * prior + evidence_budget:
                 evidence = np.maximum(voxel['alpha'] - prior, 0.0)
-                evidence_budget = self.max_total_evidence - self.K * prior
                 evidence_sum = float(np.sum(evidence))
                 if evidence_sum > 1e-9:
                     voxel['alpha'] = (
@@ -460,7 +471,7 @@ class VoxelMap:
                         voxel['feature_512'] /= fused_norm
                 voxel['feature_weight_sum'] = min(
                     old_weight + effective_evidence,
-                    self.max_observation_weight,
+                    weight_limit,
                 )
 
             if colors is not None:
@@ -478,12 +489,12 @@ class VoxelMap:
                     ).astype(np.float32)
                 voxel['color_weight_sum'] = min(
                     old_color_weight + effective_evidence,
-                    self.max_observation_weight,
+                    weight_limit,
                 )
 
             voxel['weight_sum'] = min(
                 float(voxel.get('weight_sum', 0.0)) + effective_evidence,
-                self.max_observation_weight,
+                weight_limit,
             )
             voxel['observation_count'] += 1
 

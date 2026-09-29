@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 """Pure helpers shared by the CARLA image-recognition benchmark tools."""
 
-import colorsys
 import re
 
 import numpy as np
@@ -135,36 +134,6 @@ def byte_swap_instance_ids(instance_mask):
     return ((values & 0x00FF) << 8) | ((values & 0xFF00) >> 8)
 
 
-def project_world_points(points_xyz, inverse_camera_matrix, camera_matrix):
-    """
-    Project CARLA world points into image pixels.
-
-    CARLA uses x-forward, y-right, z-up. Camera projection uses x-right,
-    y-down, z-forward, hence the axis permutation after the world transform.
-    """
-    points = np.asarray(points_xyz, dtype=np.float64)
-    if points.ndim != 2 or points.shape[1] != 3:
-        raise ValueError(f'Expected Nx3 points, got {points.shape}.')
-    homogeneous = np.column_stack((points, np.ones(points.shape[0])))
-    sensor_points = (
-        np.asarray(inverse_camera_matrix, dtype=np.float64)
-        @ homogeneous.T
-    ).T
-    camera_points = np.column_stack((
-        sensor_points[:, 1],
-        -sensor_points[:, 2],
-        sensor_points[:, 0],
-    ))
-    depth = camera_points[:, 2]
-    projected = (
-        np.asarray(camera_matrix, dtype=np.float64) @ camera_points.T
-    ).T
-    pixels = np.full((points.shape[0], 2), np.nan, dtype=np.float64)
-    valid = depth > 1e-4
-    pixels[valid] = projected[valid, :2] / depth[valid, None]
-    return pixels, depth
-
-
 def camera_intrinsics(width, height, horizontal_fov_deg):
     """Return a pinhole camera matrix matching a CARLA RGB camera."""
     width = float(width)
@@ -176,45 +145,6 @@ def camera_intrinsics(width, height, horizontal_fov_deg):
         [0.0, focal, height / 2.0],
         [0.0, 0.0, 1.0],
     ], dtype=np.float64)
-
-
-def clipped_bbox(pixels, depth, width, height):
-    """Return an in-frame xyxy box for projected vertices, or ``None``."""
-    pixels = np.asarray(pixels, dtype=np.float64)
-    depth = np.asarray(depth, dtype=np.float64)
-    valid = np.isfinite(pixels).all(axis=1) & (depth > 1e-4)
-    if not np.any(valid):
-        return None
-    x0 = int(np.floor(np.min(pixels[valid, 0])))
-    y0 = int(np.floor(np.min(pixels[valid, 1])))
-    x1 = int(np.ceil(np.max(pixels[valid, 0])))
-    y1 = int(np.ceil(np.max(pixels[valid, 1])))
-    x0 = int(np.clip(x0, 0, int(width) - 1))
-    y0 = int(np.clip(y0, 0, int(height) - 1))
-    x1 = int(np.clip(x1, x0 + 1, int(width)))
-    y1 = int(np.clip(y1, y0 + 1, int(height)))
-    if x1 - x0 < 2 or y1 - y0 < 2:
-        return None
-    return (x0, y0, x1, y1)
-
-
-def dominant_instance_in_bbox(
-    instance_mask,
-    semantic_mask,
-    bbox,
-    accepted_semantic_tags,
-):
-    """Return the dominant nonzero instance ID inside an actor projection."""
-    x0, y0, x1, y1 = bbox
-    instances = np.asarray(instance_mask)[y0:y1, x0:x1]
-    semantics = np.asarray(semantic_mask)[y0:y1, x0:x1]
-    accepted = np.isin(semantics, list(accepted_semantic_tags))
-    values = instances[accepted & (instances != 0)]
-    if values.size == 0:
-        return None, 0
-    ids, counts = np.unique(values, return_counts=True)
-    index = int(np.argmax(counts))
-    return int(ids[index]), int(counts[index])
 
 
 def parse_carla_color(color_text):
@@ -440,17 +370,3 @@ def augment_grid_truth_with_instances(
                 labels.update((label, 'vehicle'))
                 grid_truth[index]['labels'] = sorted(labels)
     return grid_truth
-
-
-def rgb_to_hsv_summary(rgb):
-    """Return a human-readable HSV triple for diagnostics."""
-    values = np.asarray(rgb, dtype=np.float64)
-    if np.max(values) > 1.0:
-        values = values / 255.0
-    hue, saturation, value = colorsys.rgb_to_hsv(
-        *np.clip(values, 0.0, 1.0).tolist())
-    return {
-        'hue_deg': float(hue * 360.0),
-        'saturation': float(saturation),
-        'value': float(value),
-    }

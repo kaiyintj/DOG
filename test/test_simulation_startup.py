@@ -74,7 +74,7 @@ def simulated_inputs(monkeypatch, tmp_path):
 
 def _start_gate(timeout=5.0):
     return subprocess.Popen([
-        sys.executable, '-m', 'semantic_mapping.runtime.simulation_startup',
+        sys.executable, '-m', 'semantic_mapping.gazebo.simulation_startup',
         '--ros-args', '-p', f'startup_timeout_sec:={timeout}',
     ], stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, env=os.environ.copy())
 

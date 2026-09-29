@@ -19,7 +19,6 @@ from nav_msgs.msg import OccupancyGrid
 from std_msgs.msg import Float32MultiArray, Header, String
 from tf2_ros import Buffer, TransformListener
 from scipy.spatial.transform import Rotation as R
-from scipy.spatial import cKDTree
 import numpy as np
 import message_filters
 import struct
@@ -63,6 +62,8 @@ from semantic_mapping.runtime.semantic_projection import (
 from semantic_mapping.runtime.voxel_map import VoxelMap
 from semantic_mapping.runtime.query_target import (
     ApproachPolicy,
+    QueryClusterPolicy,
+    rank_query_clusters,
     QueryApproachSnapshot,
     QueryApproachVoxel,
     QueryTargetSnapshot,
@@ -119,24 +120,6 @@ def query_goal_yaw(object_pos, goal_pos, robot_position=None, face_target=True):
     if not np.isfinite(direction).all() or float(np.linalg.norm(direction)) <= 1e-9:
         return 0.0
     return float(np.arctan2(direction[1], direction[0]))
-
-
-def normalize_semantic_class_name(name):
-    """Normalize configured vocabulary names for internal class lookup."""
-    return str(name).strip().lower().replace('-', '_').replace(' ', '_')
-
-
-def resolve_semantic_class_indices(vocab, class_names):
-    """Resolve named semantic classes without relying on vocabulary order."""
-    lookup = {
-        normalize_semantic_class_name(name): index
-        for index, name in enumerate(vocab)
-    }
-    return {
-        lookup[normalize_semantic_class_name(name)]
-        for name in class_names
-        if normalize_semantic_class_name(name) in lookup
-    }
 
 
 def segmentation_to_logits(
@@ -1172,182 +1155,29 @@ class GABsvmNode(Node):
             return None
         return color_membership_score(voxel.get('color_rgb'), query_color)
 
-    def select_query_cluster(
-        self,
-        candidates,
-        query_class_idx=None,
-        query_color=None,
-    ):
-        """
-        Select one spatial instance and apply color at cluster level.
-
-        Forming the semantic instance before checking color prevents a small
-        white accessory, such as a headlight on a red vehicle, from becoming a
-        standalone ``white car`` target.
-        """
-        self._last_cluster_selection_diagnostics = {
-            'cluster_count': 0,
-            'color_rejected_clusters': 0,
-            'max_cluster_color_score': 0.0,
-            'max_cluster_color_support_ratio': 0.0,
-        }
-        self._last_query_clusters = []
+    def select_query_cluster(self, candidates, query_class_idx=None, query_color=None):
+        """Adapt node parameters to the pure spatial-instance ranking policy."""
         if not candidates:
+            self._last_query_clusters, self._last_cluster_selection_diagnostics = (
+                rank_query_clusters((), None))
             return None
-
-        color_weight = float(getattr(self, 'query_color_weight', 0.35))
-
-        def candidate_rank(item):
-            semantic_score = float(item['score'])
-            if query_color is None:
-                return semantic_score
-            return (
-                (1.0 - color_weight) * semantic_score
-                + color_weight * float(item.get('color_score', 0.0))
-            )
-
-        candidates = sorted(
-            candidates, key=candidate_rank, reverse=True
-        )[:max(self.query_max_candidates, 1)]
-        positions = np.asarray([item['pos'][:2] for item in candidates])
-        tree = cKDTree(positions)
-        neighborhoods = tree.query_ball_point(positions, self.query_cluster_radius_m)
-        visited = np.zeros(len(candidates), dtype=bool)
-        clusters = []
-
-        for seed in range(len(candidates)):
-            if visited[seed]:
-                continue
-            stack = [seed]
-            visited[seed] = True
-            indices = []
-            while stack:
-                current = stack.pop()
-                indices.append(current)
-                for neighbor in neighborhoods[current]:
-                    if not visited[neighbor]:
-                        visited[neighbor] = True
-                        stack.append(neighbor)
-            clusters.append(indices)
-
-        self._last_cluster_selection_diagnostics['cluster_count'] = len(clusters)
-        robot_position = self.get_robot_position()
-        best_cluster = None
-        best_utility = -float('inf')
-        ranked_clusters = []
-        for indices in clusters:
-            cluster = [candidates[index] for index in indices]
-            total_evidence = sum(item['evidence'] for item in cluster)
-            if len(cluster) < self.query_cluster_min_voxels:
-                continue
-            if total_evidence < self.query_cluster_min_evidence:
-                continue
-
-            cluster_positions = np.asarray([item['pos'] for item in cluster])
-            horizontal_extent = float(np.max(
-                np.ptp(cluster_positions[:, :2], axis=0)))
-            if (
-                query_class_idx is not None
-                and query_class_idx < len(self.query_class_max_extent_m)
-                and horizontal_extent > self.query_class_max_extent_m[query_class_idx]
-            ):
-                continue
-
-            evidence_weights = np.asarray([
-                min(item['evidence'], 10.0) for item in cluster
-            ], dtype=np.float64)
-            scores = np.asarray([item['score'] for item in cluster])
-            semantic_score = 0.8 * float(np.average(scores, weights=evidence_weights))
-            semantic_score += 0.2 * float(np.max(scores))
-            selection_score = semantic_score
-            cluster_color_score = 0.0
-            color_support_ratio = 0.0
-            mean_color_rgb = None
-            if query_color is not None:
-                color_scores = np.asarray([
-                    float(item.get('color_score', 0.0)) for item in cluster
-                ], dtype=np.float64)
-                cluster_color_score = float(np.average(
-                    color_scores, weights=evidence_weights))
-                color_support_ratio = float(np.average(
-                    color_scores >= self.query_min_color_score,
-                    weights=evidence_weights,
-                ))
-                diagnostics = self._last_cluster_selection_diagnostics
-                diagnostics['max_cluster_color_score'] = max(
-                    diagnostics['max_cluster_color_score'],
-                    cluster_color_score,
-                )
-                diagnostics['max_cluster_color_support_ratio'] = max(
-                    diagnostics['max_cluster_color_support_ratio'],
-                    color_support_ratio,
-                )
-                if (
-                    cluster_color_score < self.query_min_color_score
-                    or color_support_ratio
-                    < getattr(self, 'query_min_color_support_ratio', 0.3)
-                ):
-                    diagnostics['color_rejected_clusters'] += 1
-                    continue
-                selection_score = (
-                    (1.0 - color_weight) * semantic_score
-                    + color_weight * cluster_color_score
-                )
-
-                valid_colors = []
-                valid_color_weights = []
-                for item, item_weight in zip(cluster, evidence_weights):
-                    color_rgb = item.get('color_rgb')
-                    if color_rgb is None:
-                        continue
-                    color_rgb = np.asarray(color_rgb, dtype=np.float64).reshape(-1)
-                    if color_rgb.size == 3 and np.all(np.isfinite(color_rgb)):
-                        valid_colors.append(color_rgb)
-                        valid_color_weights.append(item_weight)
-                if valid_colors:
-                    mean_color_rgb = np.average(
-                        np.asarray(valid_colors),
-                        axis=0,
-                        weights=np.asarray(valid_color_weights),
-                    ).astype(np.float32)
-
-            support = min(np.log1p(total_evidence) / np.log(31.0), 1.0)
-            centroid = np.average(
-                cluster_positions,
-                axis=0,
-                weights=evidence_weights,
-            )
-            distance = 0.0
-            if robot_position is not None:
-                distance = float(np.linalg.norm(centroid[:2] - robot_position[:2]))
-            utility = (
-                selection_score
-                + self.query_cluster_support_weight * support
-                - self.query_distance_weight * distance
-            )
-            representative = max(cluster, key=lambda item: item['score'])
-            cluster_result = {
-                'key': representative['key'],
-                'pos': centroid.astype(np.float32),
-                'score': selection_score,
-                'semantic_score': semantic_score,
-                'similarity': max(item['similarity'] for item in cluster),
-                'class_probability': max(
-                    item['class_probability'] for item in cluster),
-                'color_score': cluster_color_score,
-                'color_support_ratio': color_support_ratio,
-                'color_rgb': mean_color_rgb,
-                'voxel_count': len(cluster),
-                'evidence': total_evidence,
-                'utility': utility,
-            }
-            ranked_clusters.append(cluster_result)
-            if utility > best_utility:
-                best_utility = utility
-                best_cluster = cluster_result
-        ranked_clusters.sort(key=lambda item: item['utility'], reverse=True)
-        self._last_query_clusters = ranked_clusters
-        return best_cluster
+        policy = QueryClusterPolicy(
+            query_max_candidates=self.query_max_candidates,
+            query_cluster_radius_m=self.query_cluster_radius_m,
+            query_cluster_min_voxels=self.query_cluster_min_voxels,
+            query_cluster_min_evidence=self.query_cluster_min_evidence,
+            query_class_max_extent_m=self.query_class_max_extent_m,
+            query_cluster_support_weight=self.query_cluster_support_weight,
+            query_distance_weight=self.query_distance_weight,
+            query_min_color_score=getattr(self, 'query_min_color_score', 0.0),
+            query_color_weight=getattr(self, 'query_color_weight', 0.35),
+            query_min_color_support_ratio=getattr(self, 'query_min_color_support_ratio', 0.3),
+        )
+        ranked, diagnostics = rank_query_clusters(
+            candidates, policy, self.get_robot_position(), query_class_idx, query_color)
+        self._last_query_clusters = ranked
+        self._last_cluster_selection_diagnostics = diagnostics
+        return ranked[0] if ranked else None
 
     def _build_query_approach_snapshot(self, object_positions=()):
         """Adapt the mutable voxel map into one read-only approach snapshot."""
@@ -1980,7 +1810,7 @@ class GABsvmNode(Node):
 
     @staticmethod
     def _same_image_header(first, second):
-        """Return whether two SegFormer products came from the same image."""
+        """Return whether two semantic products came from the same image."""
         return (
             int(first.stamp.sec) == int(second.stamp.sec)
             and int(first.stamp.nanosec) == int(second.stamp.nanosec)
@@ -2061,6 +1891,16 @@ class GABsvmNode(Node):
             )
             return
         try:
+            if not (
+                self._same_image_header(
+                    class_mask_msg.header, source_image_msg.header)
+                and self._same_image_header(
+                    confidence_msg.header, source_image_msg.header)
+            ):
+                self.get_logger().warn(
+                    'SegFormer mask, confidence and source RGB do not share '
+                    'the same Header; refusing a cross-frame fusion.')
+                return
             class_mask = self.bridge.imgmsg_to_cv2(
                 class_mask_msg, desired_encoding='mono8')
             confidence = self.bridge.imgmsg_to_cv2(
@@ -2445,7 +2285,8 @@ class GABsvmNode(Node):
         Voxel confidence is converted back to equivalent entropy for the
         active-perception controller.
         """
-        if not self.voxel_map.voxels:
+        observation_ns = self.latest_fused_observation_ns
+        if not self.voxel_map.voxels or observation_ns is None:
             return
 
         H_max = np.log(self.voxel_map.K)
@@ -2468,7 +2309,8 @@ class GABsvmNode(Node):
             return
 
         header = Header()
-        header.stamp = self.get_clock().now().to_msg()
+        # Downstream freshness checks need observation age, including TF delay.
+        header.stamp = Time(nanoseconds=observation_ns).to_msg()
         header.frame_id = self.odom_frame
 
         fields = [
@@ -2482,9 +2324,7 @@ class GABsvmNode(Node):
 
     def publish_semantic_costmap(self):
         """Project the 3D semantic posterior into a fixed 2D Nav2 map."""
-        if not self.voxel_map.voxels:
-            return False
-
+        # An empty map must also replace the previously latched obstacle grid.
         robot_position = self.get_robot_position()
         if robot_position is None:
             if not getattr(self, 'costmap_tf_warned', False):
@@ -2588,6 +2428,14 @@ def main():
         pass
     except RCLError:
         if rclpy.ok():
+            raise
+    except RuntimeError as exc:
+        # A pending Livox take can fail after SIGINT closes the ROS context.
+        shutdown_take_error = (
+            'Unable to convert call argument to Python object '
+            '(compile in debug mode for details)'
+        )
+        if rclpy.ok() or str(exc) != shutdown_take_error:
             raise
     finally:
         node.destroy_node()

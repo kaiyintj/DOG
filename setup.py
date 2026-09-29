@@ -15,7 +15,8 @@ setup(
         ('share/' + package_name, ['package.xml']),
         (os.path.join('share', package_name, 'config'), glob('config/*.yaml')),
         (os.path.join('share', package_name, 'launch'), glob('launch/*.py')),
-        (os.path.join('share', package_name, 'benchmark'), glob('benchmark/*.yaml')),
+        (os.path.join('share', package_name, 'config', 'benchmark'),
+         glob('config/benchmark/*.yaml')),
     ],
     install_requires=[
         'setuptools',
@@ -54,15 +55,15 @@ setup(
             'planar_odom_velocity = semantic_mapping.runtime.planar_odom_velocity:main',
             'clip_node = semantic_mapping.runtime.clip_node:main',
             'segformer_node = semantic_mapping.runtime.segformer_node:main',
-            'segformer_image = semantic_mapping.runtime.segformer_image:main',
-            'sim_sensor_gate = semantic_mapping.runtime.simulation_startup:main',
+            'segformer_image = semantic_mapping.offline.segformer_image:main',
+            'sim_sensor_gate = semantic_mapping.gazebo.simulation_startup:main',
             'run_indoor_semantic_benchmark = semantic_mapping.gazebo.indoor_benchmark:main',
             'segformer_dataset = '
-            'semantic_mapping.runtime.segformer_training:dataset_main',
+            'semantic_mapping.offline.segformer_training:dataset_main',
             'segformer_finetune = '
-            'semantic_mapping.runtime.segformer_training:finetune_main',
+            'semantic_mapping.offline.segformer_training:finetune_main',
             'segformer_checkpoint = '
-            'semantic_mapping.runtime.segformer_training:checkpoint_main',
+            'semantic_mapping.offline.segformer_training:checkpoint_main',
             'ga_bsvm_node = semantic_mapping.runtime.ga_bsvm_node:main',
             'nav_goal_bridge_node = '
             'semantic_mapping.runtime.nav_goal_bridge_node:main',

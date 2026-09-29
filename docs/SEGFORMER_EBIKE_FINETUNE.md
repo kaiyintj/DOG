@@ -1,5 +1,8 @@
 # SegFormer 电动自行车微调
 
+这是户外类别扩展流程，不属于 Indoor-7 主线，也不表示已有合格微调模型。
+命令入口已按 2026-09-29 的 `semantic_mapping/offline/` 实现核对；本轮未执行训练。
+
 默认 Cityscapes 权重可输出 `car`、`bicycle` 和 `motorcycle`，但没有
 `electric_bicycle`。要真正区分这四类，需要使用带像素标注的电动
 自行车数据微调 SegFormer。

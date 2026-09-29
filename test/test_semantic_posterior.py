@@ -162,7 +162,7 @@ def test_probability_to_logits_round_trip_preserves_class_competition():
     assert np.isclose(recovered[0, 3], 0.35, atol=1e-6)
 
 
-def test_ga_bsvm_rejects_cross_frame_posterior_and_rgb_headers():
+def test_same_image_header_normalizes_frame_ids_and_checks_stamp():
     first = Header()
     first.stamp.sec = 5
     first.frame_id = '/camera'
@@ -175,3 +175,112 @@ def test_ga_bsvm_rejects_cross_frame_posterior_and_rgb_headers():
 
     assert GABsvmNode._same_image_header(first, same)
     assert not GABsvmNode._same_image_header(first, other)
+
+
+def _callback_observation(backend):
+    """Use real ROS image encodings, without creating a running ROS node."""
+    from types import SimpleNamespace
+    from unittest.mock import Mock
+
+    from cv_bridge import CvBridge
+    from sensor_msgs.msg import PointCloud2
+
+    bridge = CvBridge()
+    node = object.__new__(GABsvmNode)
+    node.frame_count = 0
+    node.frame_stride = 1
+    node.num_classes = 2
+    node.feat_dim = 1
+    node.grid_rows = node.grid_cols = 2
+    node.semantic_capability = object()
+    node.segformer_unknown_probability_floor = 0.01
+    node.bridge = bridge
+    logger = Mock()
+    node.get_logger = lambda: logger
+    node._process_semantic_frame = Mock()
+    source = bridge.cv2_to_imgmsg(
+        np.full((2, 2, 3), 80, dtype=np.uint8), encoding='rgb8')
+    if backend == 'hard_mask':
+        semantic = bridge.cv2_to_imgmsg(
+            np.zeros((2, 2), dtype=np.uint8), encoding='mono8')
+        confidence = bridge.cv2_to_imgmsg(
+            np.full((2, 2), 0.8, dtype=np.float32), encoding='32FC1')
+        products = [semantic, confidence, source]
+        callback = node.segformer_sync_callback
+    elif backend == 'full_posterior':
+        semantic = posterior_array_to_image(
+            np.full((2, 2, 2), 0.5, dtype=np.float32), Header())
+        products = [semantic, source]
+        callback = node.segformer_posterior_sync_callback
+    else:
+        semantic = semantic_posterior.float32_array_to_image(
+            np.ones((2, 2, 3), dtype=np.float32), Header())
+        products = [semantic, source]
+        callback = node.clip_sync_callback
+    for product in products:
+        product.header.stamp.sec = 1
+        product.header.frame_id = 'camera'
+    # LiDAR is intentionally offset: approximate sensor synchronization remains valid.
+    cloud = PointCloud2()
+    cloud.header.stamp.sec = 1
+    cloud.header.stamp.nanosec = 40_000_000
+    return SimpleNamespace(
+        node=node, logger=logger, cloud=cloud, products=products,
+        invoke=lambda: callback(cloud, *products),
+    )
+
+
+@pytest.mark.parametrize('backend', ['hard_mask', 'full_posterior', 'clip'])
+def test_semantic_callbacks_accept_same_image_with_offset_lidar(backend):
+    observation = _callback_observation(backend)
+    # Leading slash normalization must still be accepted.
+    observation.products[-1].header.frame_id = '/camera'
+
+    observation.invoke()
+
+    observation.node._process_semantic_frame.assert_called_once()
+    cloud, height, width, lookup = (
+        observation.node._process_semantic_frame.call_args.args)
+    assert cloud is observation.cloud
+    assert (height, width) == (2, 2)
+    logits, features, colors = lookup(np.array([0]), np.array([0]))
+    assert logits.shape == (1, 2)
+    np.testing.assert_array_equal(colors, [[80, 80, 80]])
+    assert (features is None) == (backend != 'clip')
+    observation.logger.error.assert_not_called()
+
+
+@pytest.mark.parametrize('backend', ['hard_mask', 'full_posterior', 'clip'])
+@pytest.mark.parametrize('product_index', [0, -1])
+@pytest.mark.parametrize('mismatch', ['stamp', 'frame'])
+def test_semantic_callbacks_reject_different_image_headers(
+    backend, product_index, mismatch,
+):
+    observation = _callback_observation(backend)
+    header = observation.products[product_index].header
+    if mismatch == 'stamp':
+        header.stamp.nanosec = 20_000_000  # Within supported approximate-sync slop.
+    else:
+        header.frame_id = 'other_camera'
+
+    observation.invoke()
+
+    observation.node._process_semantic_frame.assert_not_called()
+    observation.logger.warn.assert_called_once()
+    observation.logger.error.assert_not_called()
+
+
+@pytest.mark.parametrize('mismatch', ['stamp', 'frame'])
+def test_hard_mask_rejects_confidence_from_another_image(mismatch):
+    observation = _callback_observation('hard_mask')
+    header = observation.products[1].header
+    if mismatch == 'stamp':
+        header.stamp.nanosec = 20_000_000
+    else:
+        header.frame_id = 'other_camera'
+
+    observation.invoke()
+
+    observation.node._process_semantic_frame.assert_not_called()
+    observation.logger.warn.assert_called_once()
+    observation.logger.error.assert_not_called()

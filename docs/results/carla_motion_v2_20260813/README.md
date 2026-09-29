@@ -3,6 +3,17 @@
 本目录记录基于已有 CARLA 数据集完成的 Motion V2 实现与验证。它是
 实验分支的可审计结果快照，不代表 Motion V2 已冻结或已接入真实机器狗。
 
+## 2026-09-29 复核范围
+
+四份 JSON 与四份 CSV 完整可解析，体素结果表与 JSON 数值一致。
+JSON 中记录的原数据集目录与四份大型 `per_point.csv` 当前均不存在；本目录是摘要证据，
+不具备完整重放条件。严格 common-point 和逐 offset 增益表保留为历史摘录，本轮无法独立复算。
+报告绑定 `a187c7e` 且 `dirty=true`，不能仅检出该提交就声称精确复现。
+
+历史使用 `view_edge_penalty=0.0`，当前 YAML 为 0.4；当前融合实现也已有改动。
+AURC 的同分定义于 9 月 29 日修复，旧报告的 AURC 不与新结果直接混比。
+这些限制不改变当时“Motion V2 未通过主要体素验收”的结论。
+
 ## 结论
 
 Motion V2 使用 RGB 参考时刻与历史 RGB 时刻的相机相对位姿：
@@ -10,7 +21,7 @@ Motion V2 使用 RGB 参考时刻与历史 RGB 时刻的相机相对位姿：
 ```text
 相对转角 Δθ + 相对平移 Δd
                 ↓
-r_motion_v2 = exp(-0.5 * ((Δθ / 0.05)^2 + (Δd / 2.0)^2))
+r_motion_v2 = clip(exp(-0.5 * ((Δθ / 0.05)^2 + (Δd / 2.0)^2)), 0.2, 1)
 ```
 
 机制响应通过：静止时不随 offset 错误降权，直行和转弯时可靠性随
@@ -85,7 +96,7 @@ coverage delta                  = -0.000091
 
 这没有满足“错误体素 uncertainty 增量不小于正确体素”的验收条件。
 
-## 复现实验命令
+## 历史实验命令模板（需恢复数据与当时配置）
 
 Point-only：
 
@@ -109,8 +120,8 @@ Turning voxel：将最后一项替换为 `--voxel-eval`。
 
 ## 未提交的大型逐点产物
 
-`per_point.csv` 总计约 295 MB，未提交到 Git。它们仍保存在本机原结果
-目录，下面记录字节数与 SHA-256：
+`per_point.csv` 总计约 295 MB，未提交到 Git，当前机器上未找到原结果目录。
+下表仅保留当时记录的字节数与 SHA-256，不表示文件当前可用：
 
 | Result | Bytes | SHA-256 |
 |---|---:|---|
@@ -119,7 +130,7 @@ Turning voxel：将最后一项替换为 `--voxel-eval`。
 | constant point | 97,955,079 | `aea2db6dc158461e461545c6e82308e08d7c3d7bba4a1aa30fb34e15713d2841` |
 | stationary point | 90,307,384 | `b15a7e3607b4c906a3128c6c7d573e41abc2f262642850ebc9a0041e60d127b8` |
 
-## 验证
+## 当时的验证（2026-08-13）
 
 ```text
 pytest: 240 passed, 1 skipped

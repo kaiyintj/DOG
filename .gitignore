@@ -3,3 +3,8 @@ __pycache__/
 
 # Reproducible benchmark output is local runtime data, not source evidence.
 /benchmark_runs/
+
+# Machine-specific workspace inventory and cleanup notes stay local.
+/docs/WORKSPACE_AUDIT.md
+/docs/WORKSPACE_FILE_INVENTORY.md
+/docs/WORKSPACE_FILE_INVENTORY.html

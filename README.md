@@ -9,13 +9,15 @@ RGB + LiDAR + IMU
   -> SegFormer
   -> camera-LiDAR projection
   -> reliability-weighted Dirichlet voxel fusion (GA-BSVM)
-  -> semantic map and safe approach goal
+  -> semantic map and filtered approach goal
   -> Nav2
   -> robot
 ```
 
 SegFormer is the primary closed-set backend. CLIP remains available as an
 open-vocabulary comparison backend and is not mixed into SegFormer results.
+The primary query interface uses category/colour aliases, not unrestricted language
+understanding. “Query published” confirms delivery, not acceptance or arrival.
 
 ## Semantic profiles
 
@@ -83,7 +85,7 @@ ros2 run semantic_mapping semantic_query chair
 没有满足 traversability、同侧和距离约束的接近点时，最多继续尝试下一个候选物体。
 候选确认可行前不会发布 `/query_target_pose`；两个候选都失败时会保留查询，等地图
 revision 变化且至少间隔 1 秒后再重试。`query_max_candidates` 仍只控制候选构造，
-候选尝试总数由 `query_fallback_max_attempts`（默认 2）控制。
+每轮候选尝试数由 `query_fallback_max_attempts`（默认 2）控制。
 接近点快照先按本轮候选的搜索邻域筛选，再计算语义置信度；候选共享快照。
 规划器返回目标和接近点决策后，由 ROS 节点统一发布。
 
@@ -105,23 +107,39 @@ No topic listeners are required for navigation; they are only diagnostics.
 | `/perception_mode` | Speed-gate state and stale-input reason |
 
 `/query_target_pose` is an observation estimate. `/goal_pose` is the approach point
-after the traversability, robot-side and distance filters. Nav2 performs the route
-and collision checks after receiving that goal.
+after the traversability, robot-side and distance filters. Nav2 plans and controls
+the route using costmaps. The Gazebo preset disables the RPP predictive collision
+veto; these filters do not establish collision-free arrival.
 
 ## Repository layout
 
 ```text
 config/                 Runtime presets
+  benchmark/            Versioned static experiment manifests
 launch/                 ROS 2 launch composition
 semantic_mapping/
-  runtime/              Perception, fusion, query and navigation runtime
-  gazebo/               Gazebo benchmark runner support
+  runtime/              Online nodes, shared semantic math and checkpoint checks
+  offline/              SegFormer training and single-image inspection
+  gazebo/               Simulation startup gate and benchmark runner support
   carla/                CARLA-only capture and evaluation
-benchmark/              Versioned static manifests
-benchmark_runs/         Generated local results; ignored by Git
+benchmark_runs/         Legacy local output; ignored by Git
 docs/                   Current runbooks and focused experiment documents
 test/                   Unit and integration tests
 ```
+
+For reading on Windows, start with [current status](docs/PROJECT_STATUS.md),
+[indoor Gazebo results](docs/results/indoor_gazebo_20260915_20260918/README.md),
+[Lite3 observations](docs/results/lite3_20260924_20260926/README.md), and
+[CARLA Motion V2 results](docs/results/carla_motion_v2_20260813/README.md).
+These are dated summaries; large ROS bags, raw images, model weights and local
+workspace inventories are stored separately and are not needed to browse this repository.
+
+New indoor recordings belong to `/home/yk/ws/indoor_benchmark_runs/<world>/<run>/`.
+
+`segformer_image`, `segformer_dataset`, `segformer_finetune`, `segformer_checkpoint`
+and `sim_sensor_gate` keep their existing command names. Rebuild this package after
+updating so installed commands point to the reorganized modules. Online inference
+imports shared checkpoint checks directly and does not import the training module.
 
 Gazebo world assets belong to `go2_config`; benchmark manifests belong to this
 package because they describe semantic targets, starts and ground truth.
@@ -143,8 +161,10 @@ capability claims live only in the documents listed above.
 
 Outdoor Gazebo has an established working path. Indoor Small House has working
 sensors, FAST-LIO startup, SegFormer/GA-BSVM fusion and fail-closed negative cases.
-Chair/table positive navigation, collision-free arrival and speed-modulation benefit
-still require scene-level acceptance.
+Historical chair runs on September 16 and 18 reached SUCCEEDED; the latest code
+changes still need a new Gazebo run. Table positive navigation, repeatability,
+collision-free arrival and speed-modulation benefit remain unverified.
+See [dated evidence and limitations](docs/PROJECT_STATUS.md).
 
 Lite3 remains fail closed for motion until its calibration, TF authority and SDK
 safety bridge are accepted. See the dedicated handoff before any real-robot work.

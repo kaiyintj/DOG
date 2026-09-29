@@ -4,16 +4,18 @@ import numpy as np
 import pytest
 from PIL import Image
 
+from semantic_mapping.runtime.segformer_checkpoint import (
+    checkpoint_integrity,
+    training_report_meets_thresholds,
+)
 from semantic_mapping.runtime.semantic_schema import DEFAULT_CLASSES
-from semantic_mapping.runtime.segformer_training import (
+from semantic_mapping.offline.segformer_training import (
     DatasetValidationError,
     build_classifier_copy_plan,
-    checkpoint_integrity,
     checkpoint_report,
     confusion_metrics,
     initialize_dataset_layout,
     supported_project_classes,
-    training_report_meets_thresholds,
     validate_segformer_dataset,
 )
 
@@ -339,3 +341,58 @@ def test_runtime_thresholds_use_acceptance_metrics_before_validation_metrics():
 
     assert accepted is False
     assert failures == {'electric_bicycle': 0.1}
+
+
+def test_offline_training_command_writes_a_bound_checkpoint(tmp_path):
+    """Exercise the moved training entry through report acceptance, on CPU."""
+    import torch
+    from transformers import (
+        SegformerConfig,
+        SegformerForSemanticSegmentation,
+        SegformerImageProcessor,
+    )
+
+    from semantic_mapping.offline.segformer_training import finetune_main
+    from semantic_mapping.runtime.segformer_checkpoint import (
+        load_training_report,
+        verify_local_training_checkpoint,
+    )
+
+    labels = dict(enumerate(DEFAULT_CLASSES))
+    config = SegformerConfig(
+        hidden_sizes=[4, 8, 16, 32], depths=[1, 1, 1, 1],
+        num_attention_heads=[1, 1, 2, 4], sr_ratios=[1, 1, 1, 1],
+        decoder_hidden_size=8, num_labels=len(labels), id2label=labels,
+        label2id={label: index for index, label in labels.items()},
+    )
+    base_model = tmp_path / 'base'
+    SegformerForSemanticSegmentation(config).save_pretrained(base_model)
+    SegformerImageProcessor(size={'height': 32, 'width': 32}).save_pretrained(base_model)
+    dataset = initialize_dataset_layout(tmp_path / 'dataset')
+    required_ids = [DEFAULT_CLASSES.index(name) for name in (
+        'road', 'car', 'bicycle', 'electric_bicycle', 'motorcycle')]
+    mask = np.array(required_ids + [255], dtype=np.uint8).reshape(2, 3)
+    for split in ('train', 'val'):
+        for index in range(2):
+            _write_sample(dataset, split, f'sample_{index}', mask)
+    output = tmp_path / 'trained'
+    old_threads = torch.get_num_threads()
+    torch.set_num_threads(2)
+    try:
+        result = finetune_main([
+            '--dataset', str(dataset), '--output', str(output),
+            '--base-model', str(base_model), '--device', 'cpu',
+            '--epochs', '1', '--batch-size', '2', '--workers', '0',
+            '--image-size', '32', '--min-target-iou', '1',
+            '--min-electric-bicycle-iou', '1', '--min-road-iou', '1',
+        ])
+    finally:
+        torch.set_num_threads(old_threads)
+
+    assert result == 2  # Training completes, but the tiny model fails acceptance.
+    report_path, report = load_training_report(output / 'best')
+    assert report_path == output / 'training_report.json'
+    assert len(report['epochs']) == 1
+    assert report['accepted'] is False
+    assert report['valid_for_formal_evaluation'] is False
+    assert verify_local_training_checkpoint(output / 'best', report)[0]

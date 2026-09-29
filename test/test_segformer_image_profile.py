@@ -12,7 +12,7 @@ from transformers import (
     SegformerImageProcessor,
 )
 
-from semantic_mapping.runtime.segformer_image import infer_image, main
+from semantic_mapping.offline.segformer_image import infer_image, main
 
 
 @pytest.fixture

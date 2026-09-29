@@ -353,6 +353,22 @@ def test_ranking_and_reliability_metrics_cover_degenerate_cases():
     assert reliability_gap([0.9, 0.1], [1, 0]) == pytest.approx(0.1)
 
 
+def test_aurc_ties_match_mean_over_possible_rankings():
+    from itertools import permutations
+
+    # The middle three points are indistinguishable by reliability.
+    scores = [0.9, 0.5, 0.5, 0.5, 0.1]
+    rankings = [[1, *middle, 0] for middle in permutations([1, 0, 0])]
+    expected = np.mean([
+        np.mean(np.cumsum(np.asarray(labels) <= 0.5) / np.arange(1, 6))
+        for labels in rankings
+    ])
+    for labels in rankings:
+        assert area_under_risk_coverage(scores, labels) == pytest.approx(expected)
+    for labels in permutations([1, 1, 0, 0]):
+        assert area_under_risk_coverage([1] * 4, labels) == pytest.approx(0.5)
+
+
 def test_output_schema_and_strict_json_are_machine_stable(tmp_path):
     assert len(PER_POINT_COLUMNS) == len(set(PER_POINT_COLUMNS))
     assert len(FACTOR_SUMMARY_COLUMNS) == len(set(FACTOR_SUMMARY_COLUMNS))

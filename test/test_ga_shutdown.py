@@ -116,3 +116,34 @@ def test_ga_main_preserves_runtime_error_while_context_is_valid(monkeypatch):
 
     assert node.destroyed
     assert shutdown_calls == [True]
+
+
+@pytest.mark.parametrize('context_valid', [False, True])
+def test_ga_main_accepts_known_take_error_only_after_shutdown(
+    monkeypatch, context_valid,
+):
+    node = FakeNode()
+    shutdown_calls = []
+
+    def failed_take(unused_node):
+        raise RuntimeError(
+            'Unable to convert call argument to Python object '
+            '(compile in debug mode for details)'
+        )
+
+    monkeypatch.setattr(ga_bsvm_node.rclpy, 'init', lambda: None)
+    monkeypatch.setattr(ga_bsvm_node, 'GABsvmNode', lambda: node)
+    monkeypatch.setattr(ga_bsvm_node.rclpy, 'spin', failed_take)
+    monkeypatch.setattr(ga_bsvm_node.rclpy, 'ok', lambda: context_valid)
+    monkeypatch.setattr(
+        ga_bsvm_node.rclpy, 'shutdown', lambda: shutdown_calls.append(True),
+    )
+
+    if context_valid:
+        with pytest.raises(RuntimeError, match='compile in debug mode'):
+            ga_bsvm_node.main()
+    else:
+        ga_bsvm_node.main()
+
+    assert node.destroyed
+    assert shutdown_calls == ([True] if context_valid else [])

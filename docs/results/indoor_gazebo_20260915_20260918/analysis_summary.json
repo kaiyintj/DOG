@@ -1,0 +1,356 @@
+{
+  "goal": [
+    [
+      1789523847.3485944,
+      -1.350000023841858,
+      2.1500000953674316,
+      -0.05000000074505806,
+      "odom"
+    ]
+  ],
+  "target": [
+    [
+      1789523847.3484738,
+      -1.2689642906188965,
+      1.016375184059143,
+      0.11637518554925919,
+      "odom"
+    ]
+  ],
+  "navigation_wall_sec": 101.28240489959717,
+  "topics": {
+    "/tf_static": 1,
+    "/tf": 11273,
+    "/rosout": 1486,
+    "/query_target_pose": 1,
+    "/goal_pose": 1,
+    "/cloud_registered_body": 2364,
+    "/Odometry": 2310,
+    "/clock": 48066,
+    "/joint_states": 60057,
+    "/odom/ground_truth": 2406,
+    "/cmd_vel_champ": 4289,
+    "/nav_goal_bridge/status": 24,
+    "/cmd_vel": 2066,
+    "/semantic_speed_scale": 2050,
+    "/perception_mode": 2050
+  },
+  "windows": {
+    "initial60": {
+      "/odom/ground_truth": {
+        "count": 285,
+        "wall_sec": 59.66910481452942,
+        "frame": "world",
+        "start_xyz": [
+          3.5205786590983994,
+          0.9932367696225441,
+          0.21653350486472964
+        ],
+        "end_xyz": [
+          3.524574905789262,
+          0.9933303990656397,
+          0.21645937192183193
+        ],
+        "net_xy_m": 0.003997343378651096,
+        "max_from_start_xy_m": 0.00484255429498266
+      },
+      "/Odometry": {
+        "count": 277,
+        "wall_sec": 59.68842935562134,
+        "frame": "odom",
+        "start_xyz": [
+          0.011807395490971453,
+          0.0112797467754742,
+          0.0267484459360008
+        ],
+        "end_xyz": [
+          0.015849934271883533,
+          0.0101386458348853,
+          0.028512565928499434
+        ],
+        "net_xy_m": 0.004200503678345134,
+        "max_from_start_xy_m": 0.004940767011913334
+      },
+      "rtf": 0.47620014494742907,
+      "sim_sec": 28.525,
+      "modes": {}
+    },
+    "navigation": {
+      "/odom/ground_truth": {
+        "count": 416,
+        "wall_sec": 100.9861786365509,
+        "frame": "world",
+        "start_xyz": [
+          0.7497547702707051,
+          1.3262309349843093,
+          0.21571565536227788
+        ],
+        "end_xyz": [
+          2.0545188641695273,
+          3.0787825230264434,
+          0.20879215323120062
+        ],
+        "net_xy_m": 2.1849133642953946,
+        "max_from_start_xy_m": 2.1849133642953946
+      },
+      "/Odometry": {
+        "count": 397,
+        "wall_sec": 101.11126375198364,
+        "frame": "odom",
+        "start_xyz": [
+          -2.770880382574994,
+          0.18364065374920874,
+          0.05623104955374064
+        ],
+        "end_xyz": [
+          -1.5822405783302058,
+          1.9947230917329803,
+          0.048528195281266166
+        ],
+        "net_xy_m": 2.166306576043273,
+        "max_from_start_xy_m": 2.166306576043273
+      },
+      "rtf": 0.41094599078795996,
+      "sim_sec": 41.57499999999999,
+      "/cmd_vel": {
+        "count": 2025,
+        "mean_sample_value": 0.1822860652352485,
+        "last": [
+          1789523948.6130826,
+          0.035,
+          0.0,
+          0.10443532630846189
+        ],
+        "max_abs": 0.3440179903205327
+      },
+      "/cmd_vel_champ": {
+        "count": 2007,
+        "mean_sample_value": 0.08493058983474454,
+        "last": [
+          1789523948.613576,
+          0.01622014507903497,
+          0.0,
+          0.048398746974274556
+        ],
+        "max_abs": 0.15938773002465254
+      },
+      "/semantic_speed_scale": {
+        "count": 2007,
+        "mean_sample_value": 0.46542799992530454,
+        "last": [
+          1789523948.613579,
+          0.4634327292442322
+        ],
+        "max_abs": 0.6226155161857605
+      },
+      "modes": {
+        "CAUTIOUS (U=2.08, scale=0.30)": 2,
+        "CAUTIOUS (U=2.07, scale=0.30)": 22,
+        "CAUTIOUS (U=2.06, scale=0.30)": 5,
+        "CAUTIOUS (U=2.06, scale=0.31)": 9,
+        "STALE[entropy_cloud] (U=2.08, scale=0.30)": 36,
+        "CAUTIOUS (U=1.95, scale=0.30)": 1,
+        "CAUTIOUS (U=1.86, scale=0.37)": 1,
+        "CAUTIOUS (U=1.79, scale=0.40)": 1,
+        "CAUTIOUS (U=1.73, scale=0.40)": 1,
+        "CAUTIOUS (U=1.68, scale=0.40)": 1,
+        "CAUTIOUS (U=1.64, scale=0.45)": 1,
+        "CAUTIOUS (U=1.61, scale=0.46)": 193,
+        "CAUTIOUS (U=1.58, scale=0.47)": 462,
+        "CAUTIOUS (U=1.56, scale=0.47)": 3,
+        "CAUTIOUS (U=1.55, scale=0.48)": 7,
+        "CAUTIOUS (U=1.54, scale=0.48)": 20,
+        "CAUTIOUS (U=1.53, scale=0.49)": 4,
+        "CAUTIOUS (U=1.52, scale=0.49)": 4,
+        "CAUTIOUS (U=1.51, scale=0.49)": 14,
+        "CAUTIOUS (U=1.50, scale=0.49)": 12,
+        "CAUTIOUS (U=1.49, scale=0.50)": 28,
+        "CAUTIOUS (U=1.41, scale=0.53)": 5,
+        "CAUTIOUS (U=1.35, scale=0.55)": 1,
+        "CAUTIOUS (U=1.30, scale=0.56)": 1,
+        "CAUTIOUS (U=1.26, scale=0.56)": 1,
+        "CAUTIOUS (U=1.23, scale=0.56)": 1,
+        "CAUTIOUS (U=1.21, scale=0.59)": 1,
+        "CAUTIOUS (U=1.19, scale=0.60)": 12,
+        "CAUTIOUS (U=1.17, scale=0.60)": 1,
+        "CAUTIOUS (U=1.16, scale=0.60)": 1,
+        "CAUTIOUS (U=1.15, scale=0.61)": 1,
+        "CAUTIOUS (U=1.14, scale=0.62)": 3,
+        "CAUTIOUS (U=1.13, scale=0.62)": 2,
+        "CAUTIOUS (U=1.12, scale=0.62)": 2,
+        "CAUTIOUS (U=1.15, scale=0.62)": 1,
+        "CAUTIOUS (U=1.16, scale=0.61)": 1,
+        "CAUTIOUS (U=1.17, scale=0.61)": 2,
+        "CAUTIOUS (U=1.18, scale=0.61)": 1,
+        "CAUTIOUS (U=1.18, scale=0.60)": 2,
+        "CAUTIOUS (U=1.20, scale=0.60)": 18,
+        "CAUTIOUS (U=1.24, scale=0.58)": 1,
+        "CAUTIOUS (U=1.28, scale=0.57)": 1,
+        "CAUTIOUS (U=1.31, scale=0.57)": 1,
+        "CAUTIOUS (U=1.34, scale=0.57)": 1,
+        "CAUTIOUS (U=1.36, scale=0.54)": 11,
+        "CAUTIOUS (U=1.37, scale=0.54)": 4,
+        "CAUTIOUS (U=1.39, scale=0.53)": 4,
+        "CAUTIOUS (U=1.40, scale=0.53)": 3,
+        "CAUTIOUS (U=1.41, scale=0.52)": 6,
+        "CAUTIOUS (U=1.42, scale=0.52)": 4,
+        "CAUTIOUS (U=1.40, scale=0.52)": 1,
+        "CAUTIOUS (U=1.39, scale=0.52)": 1,
+        "CAUTIOUS (U=1.38, scale=0.54)": 1,
+        "CAUTIOUS (U=1.35, scale=0.54)": 8,
+        "CAUTIOUS (U=1.43, scale=0.53)": 1,
+        "CAUTIOUS (U=1.45, scale=0.51)": 1,
+        "CAUTIOUS (U=1.46, scale=0.51)": 1,
+        "CAUTIOUS (U=1.47, scale=0.51)": 1,
+        "CAUTIOUS (U=1.48, scale=0.51)": 1,
+        "CAUTIOUS (U=1.48, scale=0.50)": 1,
+        "CAUTIOUS (U=1.50, scale=0.50)": 32,
+        "CAUTIOUS (U=1.51, scale=0.50)": 1,
+        "CAUTIOUS (U=1.53, scale=0.48)": 9,
+        "CAUTIOUS (U=1.56, scale=0.48)": 1,
+        "CAUTIOUS (U=1.57, scale=0.47)": 200,
+        "CAUTIOUS (U=1.59, scale=0.46)": 355,
+        "CAUTIOUS (U=1.60, scale=0.46)": 234,
+        "CAUTIOUS (U=1.62, scale=0.46)": 39,
+        "CAUTIOUS (U=1.98, scale=0.33)": 1,
+        "CAUTIOUS (U=1.90, scale=0.36)": 1,
+        "CAUTIOUS (U=1.84, scale=0.36)": 1,
+        "CAUTIOUS (U=1.78, scale=0.37)": 1,
+        "CAUTIOUS (U=1.74, scale=0.41)": 1,
+        "CAUTIOUS (U=1.71, scale=0.42)": 1,
+        "CAUTIOUS (U=1.69, scale=0.42)": 1,
+        "CAUTIOUS (U=1.66, scale=0.42)": 1,
+        "CAUTIOUS (U=1.65, scale=0.45)": 1,
+        "CAUTIOUS (U=1.63, scale=0.45)": 1,
+        "CAUTIOUS (U=1.62, scale=0.45)": 1,
+        "CAUTIOUS (U=1.61, scale=0.45)": 1,
+        "CAUTIOUS (U=1.59, scale=0.47)": 187
+      }
+    },
+    "after_success": {
+      "/odom/ground_truth": {
+        "count": 174,
+        "wall_sec": 36.91239881515503,
+        "frame": "world",
+        "start_xyz": [
+          2.058910343647559,
+          3.0793509104316112,
+          0.2138996929734287
+        ],
+        "end_xyz": [
+          2.1401846893835104,
+          3.0817562193627865,
+          0.2118041524652719
+        ],
+        "net_xy_m": 0.08130993042587951,
+        "max_from_start_xy_m": 0.08139173794370325
+      },
+      "/Odometry": {
+        "count": 168,
+        "wall_sec": 35.88356971740723,
+        "frame": "odom",
+        "start_xyz": [
+          -1.5779712423099084,
+          1.9981427533282048,
+          0.054287523191274355
+        ],
+        "end_xyz": [
+          -1.5017271899555027,
+          2.005167407098255,
+          0.05289981918265414
+        ],
+        "net_xy_m": 0.07656697251433174,
+        "max_from_start_xy_m": 0.08285612417391067
+      },
+      "rtf": 0.46928564577066256,
+      "sim_sec": 17.345000000000027,
+      "/cmd_vel": {
+        "count": 41,
+        "mean_sample_value": 0.0,
+        "last": [
+          1789523950.6630287,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "max_abs": 0.0
+      },
+      "/cmd_vel_champ": {
+        "count": 42,
+        "mean_sample_value": 0.0,
+        "last": [
+          1789523950.9479775,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "max_abs": 0.0
+      },
+      "/semantic_speed_scale": {
+        "count": 42,
+        "mean_sample_value": 0.4542165334735598,
+        "last": [
+          1789523950.9479938,
+          0.0
+        ],
+        "max_abs": 0.4687926173210144
+      },
+      "modes": {
+        "CAUTIOUS (U=1.59, scale=0.46)": 24,
+        "CAUTIOUS (U=1.59, scale=0.47)": 2,
+        "CAUTIOUS (U=1.58, scale=0.47)": 15,
+        "STOPPED (cmd_vel timeout)": 1
+      }
+    },
+    "after_settle": {
+      "/odom/ground_truth": {
+        "count": 150,
+        "wall_sec": 31.844376802444458,
+        "frame": "world",
+        "start_xyz": [
+          2.1275335776370543,
+          3.082744447995433,
+          0.21566082678175785
+        ],
+        "end_xyz": [
+          2.1401846893835104,
+          3.0817562193627865,
+          0.2118041524652719
+        ],
+        "net_xy_m": 0.012689650280906127,
+        "max_from_start_xy_m": 0.012779291857499483
+      },
+      "/Odometry": {
+        "count": 145,
+        "wall_sec": 31.022212505340576,
+        "frame": "odom",
+        "start_xyz": [
+          -1.5177079010360892,
+          2.0047350971503355,
+          0.05368961293426553
+        ],
+        "end_xyz": [
+          -1.5017271899555027,
+          2.005167407098255,
+          0.05289981918265414
+        ],
+        "net_xy_m": 0.015986557432175655,
+        "max_from_start_xy_m": 0.02257444160784885
+      },
+      "rtf": 0.46946332818684894,
+      "sim_sec": 14.995000000000005,
+      "modes": {}
+    }
+  },
+  "warnings": {
+    "freshness": 2,
+    "tf_drop": 5
+  },
+  "terminal_logs": [
+    [
+      1789523948.6309993,
+      "nav_goal_bridge_node",
+      "Nav2 目标 #1 结束: SUCCEEDED, goal_id=9d7f3831363f4ab6be239fd799ea95d2。"
+    ]
+  ]
+}

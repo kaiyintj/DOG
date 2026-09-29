@@ -7,7 +7,6 @@ from std_msgs.msg import Float32MultiArray, MultiArrayDimension, Header
 from semantic_mapping.runtime.ga_bsvm_node import (
     GABsvmNode,
     query_goal_yaw,
-    resolve_semantic_class_indices,
     scale_camera_matrix,
 )
 from semantic_mapping.runtime.voxel_map import VoxelMap
@@ -129,6 +128,63 @@ def make_costmap_node(robot_position):
     return node, warnings
 
 
+def test_costmap_clears_last_obstacle_after_pruning():
+    node, _ = make_costmap_node(np.zeros(3))
+    node.map_pub = CapturingPublisher()
+    node.voxel_map.update(
+        np.asarray([[2.1, 0.1, 0.1]]), np.ones(1),
+        np.asarray([[0.0, 6.0]]), timestamp_sec=1.0)
+    assert node.publish_semantic_costmap()
+    assert 100 in node.semantic_cost_pub.messages[-1].data
+
+    removed = node.voxel_map.prune(
+        12.0, dynamic_class_ids=[1], dynamic_ttl_sec=10.0)
+    assert removed['total'] == 1
+    assert node.publish_semantic_costmap()
+    cleared = node.semantic_cost_pub.messages[-1]
+    assert len(node.semantic_cost_pub.messages) == 2
+    assert 100 not in cleared.data
+    assert -1 in cleared.data
+    assert cleared.data == node.map_pub.messages[-1].data
+
+
+def test_delayed_tf_entropy_retains_observation_time():
+    from types import SimpleNamespace
+    from semantic_mapping.runtime.active_perception_node import is_sample_fresh
+
+    node, _ = make_costmap_node(np.zeros(3))
+    node.get_clock = lambda: SimpleNamespace(now=lambda: SimpleNamespace(
+        nanoseconds=13_000_000_000, to_msg=lambda: TimeMsg(sec=13)))
+    node.pub_entropy_data = CapturingPublisher()
+    node.retry_pending_query = lambda: None
+    node.entropy_publish_every_n_processed = 1
+    node.cloud_publish_stride = 100
+    node.latest_fused_observation_ns = None
+    frame = {
+        'points': np.asarray([[0.1, 0.1, 0.1]]),
+        'stamp_msg': TimeMsg(sec=10),
+        'reliability': np.ones(1),
+        'logits': np.asarray([[0.0, 6.0]]),
+        'features': None, 'colors': None, 'processed_count': 1,
+    }
+    node.pending_tf_frames = deque([{
+        'queued_at_ns': 10_100_000_000,
+        'target_frame': 'odom', 'source_frame': 'base_link',
+        'stamp': frame['stamp_msg'],
+        'frame_data': frame,
+    }])
+    node.tf_retry_max_age_sec = 3.0
+    node.tf_queue_drop_count = 0
+    node.consecutive_tf_drops = 0
+    node._transform_semantic_points = lambda points, *args: points
+    node.retry_pending_tf_frames()
+
+    assert node.tf_queue_drop_count == 0
+    stamp = node.pub_entropy_data.messages[-1].header.stamp
+    assert stamp == frame['stamp_msg']
+    assert not is_sample_fresh(13.0, stamp.sec + stamp.nanosec / 1e9, 2.5)
+
+
 def test_camera_matrix_scales_to_runtime_image_resolution():
     camera_matrix = np.array([
         [600.0, 0.0, 320.0],
@@ -225,16 +281,6 @@ def test_nonfinite_imu_sample_fails_closed_without_entering_buffer():
 
     assert len(node.imu_buffer) == 0
     assert reliability == 0.2
-
-
-def test_semantic_class_indices_are_resolved_from_reordered_vocab():
-    vocab = ['car', 'unknown background', 'road', 'electric bicycle', 'person']
-
-    assert resolve_semantic_class_indices(vocab, ('road',)) == {2}
-    assert resolve_semantic_class_indices(
-        vocab,
-        ('person', 'car', 'electric_bicycle'),
-    ) == {0, 3, 4}
 
 
 def test_semantic_costmap_filters_height_relative_to_robot_base():

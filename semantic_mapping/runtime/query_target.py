@@ -2,8 +2,8 @@
 ROS-independent query-target planning primitives.
 
 The ROS node owns message transport and map adaptation.  This module owns the
-small decision that turns a ranked, read-only candidate snapshot into the
-first candidate with a usable approach.
+spatial-instance ranking and the decision that turns a ranked, read-only
+candidate snapshot into the first candidate with a usable approach.
 """
 
 from dataclasses import dataclass
@@ -11,6 +11,7 @@ from types import MappingProxyType
 from typing import Any, Callable, Mapping, Optional, Tuple
 
 import numpy as np
+from scipy.spatial import cKDTree
 
 
 @dataclass(frozen=True)
@@ -320,3 +321,179 @@ def plan_query_target(
         succeeded=False,
         reason='no_approachable_candidate',
     )
+
+
+@dataclass(frozen=True)
+class QueryClusterPolicy:
+    """Evidence, extent, color and distance rules for ranking spatial instances."""
+
+    query_max_candidates: int
+    query_cluster_radius_m: float
+    query_cluster_min_voxels: int
+    query_cluster_min_evidence: float
+    query_class_max_extent_m: tuple
+    query_cluster_support_weight: float
+    query_distance_weight: float
+    query_min_color_score: float
+    query_color_weight: float = 0.35
+    query_min_color_support_ratio: float = 0.3
+
+
+def rank_query_clusters(
+    candidates, policy, robot_position=None, query_class_idx=None, query_color=None,
+):
+    """Cluster semantic evidence before applying color and return ranked instances."""
+    diagnostics = {
+        'cluster_count': 0,
+        'color_rejected_clusters': 0,
+        'max_cluster_color_score': 0.0,
+        'max_cluster_color_support_ratio': 0.0,
+    }
+    if not candidates:
+        return [], diagnostics
+
+    color_weight = policy.query_color_weight
+
+    def candidate_rank(item):
+        semantic_score = float(item['score'])
+        if query_color is None:
+            return semantic_score
+        return (
+            (1.0 - color_weight) * semantic_score
+            + color_weight * float(item.get('color_score', 0.0))
+        )
+
+    candidates = sorted(
+        candidates, key=candidate_rank, reverse=True
+    )[:max(policy.query_max_candidates, 1)]
+    positions = np.asarray([item['pos'][:2] for item in candidates])
+    tree = cKDTree(positions)
+    neighborhoods = tree.query_ball_point(positions, policy.query_cluster_radius_m)
+    visited = np.zeros(len(candidates), dtype=bool)
+    clusters = []
+
+    for seed in range(len(candidates)):
+        if visited[seed]:
+            continue
+        stack = [seed]
+        visited[seed] = True
+        indices = []
+        while stack:
+            current = stack.pop()
+            indices.append(current)
+            for neighbor in neighborhoods[current]:
+                if not visited[neighbor]:
+                    visited[neighbor] = True
+                    stack.append(neighbor)
+        clusters.append(indices)
+
+    diagnostics['cluster_count'] = len(clusters)
+    ranked_clusters = []
+    for indices in clusters:
+        cluster = [candidates[index] for index in indices]
+        total_evidence = sum(item['evidence'] for item in cluster)
+        if len(cluster) < policy.query_cluster_min_voxels:
+            continue
+        if total_evidence < policy.query_cluster_min_evidence:
+            continue
+
+        cluster_positions = np.asarray([item['pos'] for item in cluster])
+        horizontal_extent = float(np.max(
+            np.ptp(cluster_positions[:, :2], axis=0)))
+        if (
+            query_class_idx is not None
+            and query_class_idx < len(policy.query_class_max_extent_m)
+            and horizontal_extent > policy.query_class_max_extent_m[query_class_idx]
+        ):
+            continue
+
+        evidence_weights = np.asarray([
+            min(item['evidence'], 10.0) for item in cluster
+        ], dtype=np.float64)
+        scores = np.asarray([item['score'] for item in cluster])
+        semantic_score = 0.8 * float(np.average(scores, weights=evidence_weights))
+        semantic_score += 0.2 * float(np.max(scores))
+        selection_score = semantic_score
+        cluster_color_score = 0.0
+        color_support_ratio = 0.0
+        mean_color_rgb = None
+        if query_color is not None:
+            color_scores = np.asarray([
+                float(item.get('color_score', 0.0)) for item in cluster
+            ], dtype=np.float64)
+            cluster_color_score = float(np.average(
+                color_scores, weights=evidence_weights))
+            color_support_ratio = float(np.average(
+                color_scores >= policy.query_min_color_score,
+                weights=evidence_weights,
+            ))
+            diagnostics['max_cluster_color_score'] = max(
+                diagnostics['max_cluster_color_score'],
+                cluster_color_score,
+            )
+            diagnostics['max_cluster_color_support_ratio'] = max(
+                diagnostics['max_cluster_color_support_ratio'],
+                color_support_ratio,
+            )
+            if (
+                cluster_color_score < policy.query_min_color_score
+                or color_support_ratio
+                < policy.query_min_color_support_ratio
+            ):
+                diagnostics['color_rejected_clusters'] += 1
+                continue
+            selection_score = (
+                (1.0 - color_weight) * semantic_score
+                + color_weight * cluster_color_score
+            )
+
+            valid_colors = []
+            valid_color_weights = []
+            for item, item_weight in zip(cluster, evidence_weights):
+                color_rgb = item.get('color_rgb')
+                if color_rgb is None:
+                    continue
+                color_rgb = np.asarray(color_rgb, dtype=np.float64).reshape(-1)
+                if color_rgb.size == 3 and np.all(np.isfinite(color_rgb)):
+                    valid_colors.append(color_rgb)
+                    valid_color_weights.append(item_weight)
+            if valid_colors:
+                mean_color_rgb = np.average(
+                    np.asarray(valid_colors),
+                    axis=0,
+                    weights=np.asarray(valid_color_weights),
+                ).astype(np.float32)
+
+        support = min(np.log1p(total_evidence) / np.log(31.0), 1.0)
+        centroid = np.average(
+            cluster_positions,
+            axis=0,
+            weights=evidence_weights,
+        )
+        distance = 0.0
+        if robot_position is not None:
+            distance = float(np.linalg.norm(centroid[:2] - robot_position[:2]))
+        utility = (
+            selection_score
+            + policy.query_cluster_support_weight * support
+            - policy.query_distance_weight * distance
+        )
+        representative = max(cluster, key=lambda item: item['score'])
+        cluster_result = {
+            'key': representative['key'],
+            'pos': centroid.astype(np.float32),
+            'score': selection_score,
+            'semantic_score': semantic_score,
+            'similarity': max(item['similarity'] for item in cluster),
+            'class_probability': max(
+                item['class_probability'] for item in cluster),
+            'color_score': cluster_color_score,
+            'color_support_ratio': color_support_ratio,
+            'color_rgb': mean_color_rgb,
+            'voxel_count': len(cluster),
+            'evidence': total_evidence,
+            'utility': utility,
+        }
+        ranked_clusters.append(cluster_result)
+    ranked_clusters.sort(key=lambda item: item['utility'], reverse=True)
+    return ranked_clusters, diagnostics

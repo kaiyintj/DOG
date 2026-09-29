@@ -1,6 +1,6 @@
 # 运行手册
 
-更新日期：2026-09-09
+核对日期：2026-09-29
 
 本手册只保存当前可执行流程。能力边界见 [PROJECT_STATUS.md](PROJECT_STATUS.md)，
 室内实验定义和结果见 [INDOOR_GAZEBO_BENCHMARK.md](INDOOR_GAZEBO_BENCHMARK.md)。
@@ -16,6 +16,9 @@ source "$SEMANTIC_WS/install/setup.bash"
 export HF_HOME="$SEMANTIC_WS/.cache/huggingface"
 ```
 
+训练/单图工具已迁到 `semantic_mapping/offline/`，仿真启动门已迁到 `gazebo/`；
+`ros2 run` 和 launch 的名称、参数不变。更新源码后需要重新构建，让安装入口指向新位置。
+
 只修改 `semantic_mapping` 后，定向构建该包：
 
 ```bash
@@ -29,12 +32,15 @@ source "$SEMANTIC_WS/install/setup.bash"
 
 ```bash
 cd "$SEMANTIC_WS/src/semantic_mapping"
-python3 scripts/check_b_disk_runtime.py --backend segformer
+python3 scripts/check_b_disk_runtime.py --backend segformer --ontology-profile indoor7
 ros2 pkg executables semantic_mapping
 ```
 
 如果预检失败，按它报告的缺项修复，不复制其他磁盘上的旧 `build/`、`install/` 或
-`log/`。CLIP 对比实验把 `--backend segformer` 改为 `--backend clip`。
+`log/`。户外 SegFormer 改用 `--ontology-profile outdoor13`（默认）；CLIP 对比改用
+`--backend clip`，不按 profile 选择缓存。预检检查默认模型文件和依赖，不证明运行推理或导航成功。
+本地模型齐全且不需下载时，可设置 `HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1`，
+避免启动时访问 Hugging Face；自定义 checkpoint 需单独确认文件和加载结果。
 
 ## 2. Gazebo 统一入口
 
@@ -111,7 +117,7 @@ Fixed Frame 使用 `odom`。根据需要添加以下 display：
 | OccupancyGrid | `/semantic_cost_map` | 语义代价地图 |
 | Image | `/segformer/color_mask` | 分割可视化 |
 | PoseStamped | `/query_target_pose` | 目标估计 |
-| PoseStamped | `/goal_pose` | 安全接近点 |
+| PoseStamped | `/goal_pose` | 语义约束接近点，路径/碰撞由 Nav2 检查 |
 
 如果 RViz 没打开，先确认传感器门是否已成功退出，再确认进程：
 
@@ -144,8 +150,7 @@ ros2 launch semantic_mapping nav_sim.launch.py \
 ```
 
 Gazebo 入口默认使用 `config/nav2_sim_params.yaml`。它仍保留点云和语义代价层供规划使用，
-但关闭 RPP 的预测碰撞 veto；当前 Small House 的语义接近点需要这个仿真专用设置才能完成
-最后一段到达。真实机仍使用 `nav2_params.yaml`，不要把这个仿真参数文件用于实机。
+但关闭 RPP 的预测碰撞 veto；历史 Small House 到达案例使用了此设置，当前代码仍需复测。真实机仍使用 `nav2_params.yaml`，不要把这个仿真参数文件用于实机。
 
 户外只把参数文件改为：
 
@@ -227,14 +232,15 @@ ros2 topic echo /perception_mode
 
 `/semantic_speed_scale` 是主动感知速度倍率。室内配置中，正常倍率范围为 0.3–1.0；路径
 缺少地图支持时目标倍率为 0.65；必要输入过期时降到 0.3；速度命令超过 0.25 秒未更新时
-watchdog 发布零速。`STALE[...]` 会在 `/perception_mode` 中说明缺少或过期的输入。
+watchdog 发布零速。不确定性点云按最新融合观测的源时间判断过期，包含 TF 等待时间。
+`STALE[...]` 会在 `/perception_mode` 中说明缺少或过期的输入。
 
 这些话题证明减速链在运行，不单独证明减速提高了 Navigation Success。正式收益需要同一
 world、start、query、seed 和障碍条件下做 OFF/ON 对比。
 
 ## 3. Small House benchmark runner
 
-`benchmark/small_house_manifest.yaml` 是可追踪的实验说明：world、目标真值、起点、case、
+`config/benchmark/small_house_manifest.yaml` 是可追踪的实验说明：world、目标真值、起点、case、
 seed 和 checkpoint。它不是 Gazebo world，也不是一次运行产生的日志。
 
 运行一个失败关闭 smoke：
@@ -249,7 +255,7 @@ cd "$SEMANTIC_WS/src/semantic_mapping"
 RUN_ID="$(date +%Y%m%d_%H%M%S)"
 RESULT_ROOT="$SEMANTIC_WS/indoor_benchmark_runs"
 ros2 run semantic_mapping run_indoor_semantic_benchmark \
-  --manifest benchmark/small_house_manifest.yaml \
+  --manifest config/benchmark/small_house_manifest.yaml \
   --case floor_nonqueryable \
   --output "$RESULT_ROOT/aws_small_house/$RUN_ID/floor_nonqueryable"
 ```
@@ -307,7 +313,7 @@ ros2 bag play /home/yk/Downloads/gate_03_ros2 \
 ```
 
 先查询 `car`。查询时地图证据不足会在地图 revision 变化且距离上次尝试至少 1 秒后重试；
-同一次查询最多评估两个候选，只有接近点确认可行后才发布 target/goal。收到新查询或被
+每轮查询尝试最多评估两个候选，只有接近点确认可行后才发布 target/goal。收到新查询或被
 能力门拒绝后结束当前重试。
 
 ## 5. CLIP 对比路线
@@ -356,8 +362,9 @@ Indoor-7 正常后验编码应为 `16FC8`。
 - `unresolved`：当前 profile 没有该查询或别名；
 - `nonqueryable`：类别用于结构/通行性，不是目标；
 - `not_ready`：profile、posterior 或标定能力尚未就绪；
-- accepted 但无 target：检查类别主导体素、证据阈值和聚类数量；
-- 有 target 但无 goal：检查 traversable 支持、机器人同侧和接近距离约束；有 goal 但不移动时查看 Nav2 costmap 与规划器日志。
+- accepted 但无 target/goal：检查类别主导体素、证据阈值、聚类、可通行支持及接近距离；
+- 当前代码在接近点有效后才发布 target/goal；只收到其中之一时，先查订阅时机和通信；
+- 有 goal 但不移动：查看 Goal Bridge、Nav2 costmap 与规划器日志。
 
 不要通过把 unknown 强映射为目标类、关闭类别主导门或取消安全接近约束来伪造正例。
 
@@ -387,5 +394,144 @@ action 不可用时检查 Nav2 生命周期；有 `/cmd_vel` 但没有 `/cmd_vel
 - CARLA 三维可靠性：[CARLA_RELIABILITY_BENCHMARK.md](CARLA_RELIABILITY_BENCHMARK.md)
 - 电动自行车训练：[SEGFORMER_EBIKE_FINETUNE.md](SEGFORMER_EBIKE_FINETUNE.md)
 
-Lite3 的采集、离线复验和运动前门禁只维护在实机交接文档中，本手册不复制。当前室内任务
-也不授权真实机器人运动。
+Lite3 命令集中在下方第 8 节，已有证据和运动门禁集中在实机交接文档。
+
+## 8. Lite3 实机传感器采集与上机前清单
+
+Lite3 机载 Jetson 使用 Ubuntu 20.04、ROS 2 Foxy 和厂商工作区。第 8.2–8.4 节在机器狗
+SSH 终端执行，不使用第 1 节的 Humble 环境；第 8.8–8.9 节在开发电脑执行。传感器数据和 Bag 都保存在机器狗
+本地，因此机器狗不需要访问互联网，也不依赖电脑与机器狗之间的 DDS 组播。
+
+### 8.1 已确认接口
+
+| 数据 | 话题 | 类型 | 实测频率 |
+| --- | --- | --- | --- |
+| Mid360 点云 | `/timefix/lidar` | `livox_ros_driver2/msg/CustomMsg` | 约 10 Hz |
+| Mid360 IMU | `/timefix/imu` | `sensor_msgs/msg/Imu` | 约 200 Hz |
+| D435I 彩色图像 | `/camera/color/image_raw` | `sensor_msgs/msg/Image` | `424x240` Bag 中约 15 Hz |
+| D435I 内参 | `/camera/color/camera_info` | `sensor_msgs/msg/CameraInfo` | Bag 中约 15 Hz |
+
+`/timefix/lidar` 的 `header.stamp`、`timebase` 和点偏移已恢复为同一时间基准。这里的频率
+只证明消息与录包链路可用，不等于 LiDAR、IMU 和相机外参或硬件同步已经完成标定。
+
+### 8.2 终端 1：Mid360 与 IMU
+
+机器狗保持趴下，在第一个 SSH 终端执行：
+
+```bash
+source /opt/ros/foxy/setup.bash
+source ~/lite_cog_ros2/driver/mid360_ws/install/setup.bash
+
+LIVOX_CONFIG=~/lite_cog_ros2/driver/mid360_ws/src/livox_ros_driver2-master/config/MID360_config.json
+
+ros2 run livox_ros_driver2 livox_ros_driver2_node --ros-args \
+  -p xfer_format:=1 \
+  -p multi_topic:=0 \
+  -p data_src:=0 \
+  -p publish_freq:=10.0 \
+  -p output_data_type:=0 \
+  -p frame_id:=rslidar \
+  -p user_config_path:="$LIVOX_CONFIG" \
+  -p cmdline_input_bd_code:=livox0000000001 \
+  -r /livox/lidar:=/timefix/lidar \
+  -r /livox/imu:=/timefix/imu
+```
+
+该终端持续运行，不要再启动第二个 Livox 驱动。
+
+### 8.3 终端 2：D435I
+
+第二个 SSH 终端执行：
+
+```bash
+source /opt/ros/foxy/setup.bash
+source ~/lite_cog_ros2/driver/realsense_ws/install/setup.bash
+
+ros2 launch realsense2_camera dr_camera_launch.py \
+  enable_color:=true \
+  color_width:=424 \
+  color_height:=240 \
+  color_fps:=15.0 \
+  enable_depth:=true \
+  depth_width:=424 \
+  depth_height:=240 \
+  depth_fps:=15.0 \
+  enable_pointcloud:=false \
+  enable_sync:=true
+```
+
+2026-07-26 使用 `rs-enumerate-devices` 确认该 D435I 原生支持 Color RGB8 和 Depth
+Z16 的 `424x240@15Hz` 模式。相对原来的 `640x480`，彩色图每帧数据量约降低 67%，
+更适合 Jetson 同时写入 LiDAR、IMU 和原始 RGB。当前厂商 wrapper 的纯彩色模式曾出现
+“话题存在但没有图像”的情况，因此保留同分辨率深度流作为稳定启动基准；采集脚本
+不会记录深度图。启动时短暂出现
+`control_transfer ... error 11` 可以记录为警告。若它持续刷屏并伴随图像停流，应停止本次采集并检查 USB 供电、带宽和驱动，再重启传感器。
+
+### 8.4 静止录制与验收
+
+机器狗终端 3：前两个传感器终端保持运行，使用已部署到 `~/lite3_tools` 的当前脚本。
+脚本依赖同目录的 `verify_lite3_capture.py` 和 `audit_lite3_timestamps.py`。
+
+```bash
+source /opt/ros/foxy/setup.bash
+source ~/lite_cog_ros2/driver/mid360_ws/install/setup.bash
+bash ~/lite3_tools/record_lite3_sensors.sh
+```
+
+输出位于机器狗 `~/lite3_bags/`；以脚本打印的本次目录为准。录制中保持静止，
+需要提前结束时在录制终端按 Ctrl-C，等待 recorder 完成关闭。通过要求为四路输入
+频率、共同时间窗和 header 连续性满足脚本门限；报告中的接收调度警告不等同于
+传感器 header 断流。已有推荐静止 Bag，无配置或安装变化时不重复录制。
+
+TF 权威、受控运动与 SDK 桥接的门限见 [Lite3 交接第 6 节](LITE3_REAL_HANDOFF.md#6-运动前不可跳过的阻塞项)。
+这里的传感器、录制和离线命令均不授权底盘运动。
+
+### 8.8 开发电脑离线结构烟测
+
+电脑终端：需本地 CLIP 权重、至少 8 GiB 空间和当前工作区。先检查运行环境，
+只有 `OVERALL=B_DISK_RUNTIME_READY` 后才运行；环境检查失败先处理依赖，不回放 Bag。
+
+```bash
+source /opt/ros/humble/setup.bash
+source /home/yk/ws/install/setup.bash
+cd /home/yk/ws/src/semantic_mapping
+export HF_HOME=/home/yk/ws/.cache/huggingface
+export HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1
+python3 scripts/check_b_disk_runtime.py --backend clip
+```
+
+环境检查通过后：
+
+```bash
+bash scripts/run_lite3_offline_smoke.sh \
+  --input /home/yk/ws/lite3_bags/lite3_concurrent_20260818_203250_HsW1R7 \
+  --work-root /home/yk/ws/lite3_offline_runs
+```
+
+默认 CPU CLIP、隔离 domain 42、仅本机 DDS、0.1 倍速；脚本不启动 Nav2 或运动桥。
+每次运行在指定目录下创建独立批次，保留参数、Git 状态、日志、merged/output Bag
+和验收报告。Ctrl-C 会清理本次进程组并记录 `ABORTED`；不要删除源 Bag。
+
+通过状态 `ALGORITHM_STATIC_PASS_NON_GEOMETRIC` 仅证明静止输入的软件链通过。
+当前 CLIP 帧携带源图 Header，投影按观测时间匹配 TF；真实运动同步、几何精度和
+实机执行仍需独立验收。实机标定和运动开关继续关闭。
+
+### 8.9 离线复现与迁移备份清单
+
+只读验证历史精简归档：
+
+```bash
+cd /home/yk/ws/src/semantic_mapping
+python3 scripts/verify_lite3_migrated_archive.py \
+  --source-dir /home/yk/ws/lite3_bags/lite3_concurrent_20260818_203250_HsW1R7 \
+  --run-dir /home/yk/ws/lite3_offline_runs/lite3_clip_smoke_20260821T020049Z_xLnEzN
+```
+
+期望 `SOURCE_HASHES`、`RETAINED_ARTIFACTS`、`EXPECTED_OMISSIONS`、
+`IMPLEMENTATION_HASHES` 均为 `PASS`，且 `OVERALL=B_DISK_COMPACT_ARCHIVE_PASS`。
+验证器按 manifest 的历史 commit 检查实现；不要改写历史来源路径。
+
+该验证器仅适用历史精简目录，不能用于包含全部 payload 的完整烟测。完整证据位于
+`/home/yk/ws/lite3_offline_runs/lite3_clip_smoke_20260823T030733Z_wR2TtN`，其
+`merged/`、`output_bag/`、manifest 和报告必须保留。归档完整性不代表当前运行环境可用，
+更不代表 `MOTION_READY=YES`。各状态含义见 [Lite3 交接](LITE3_REAL_HANDOFF.md)。

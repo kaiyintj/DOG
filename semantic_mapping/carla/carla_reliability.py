@@ -780,7 +780,7 @@ def binary_auroc(scores, correct):
 
 
 def area_under_risk_coverage(scores, correct):
-    """Return discrete AURC when retaining points from high to low score."""
+    """Return discrete AURC, averaging over permutations within score ties."""
     scores = np.asarray(scores, dtype=np.float64).reshape(-1)
     labels = np.asarray(correct, dtype=np.float64).reshape(-1)
     if scores.size != labels.size:
@@ -791,7 +791,17 @@ def area_under_risk_coverage(scores, correct):
     if scores.size == 0:
         return None
     order = np.argsort(-scores, kind='stable')
-    cumulative_errors = np.cumsum(labels[order] <= 0.5)
+    sorted_scores = scores[order]
+    errors = (labels[order] <= 0.5).astype(np.float64)
+    starts = np.r_[0, np.flatnonzero(np.diff(sorted_scores) != 0) + 1]
+    sizes = np.diff(np.r_[starts, scores.size])
+    group_errors = np.add.reduceat(errors, starts)
+    errors_before = np.cumsum(group_errors) - group_errors
+    positions = np.arange(scores.size) - np.repeat(starts, sizes) + 1
+    cumulative_errors = (
+        np.repeat(errors_before, sizes)
+        + positions * np.repeat(group_errors / sizes, sizes)
+    )
     risks = cumulative_errors / np.arange(1, scores.size + 1)
     return float(np.mean(risks))
 

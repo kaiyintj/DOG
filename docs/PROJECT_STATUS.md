@@ -1,155 +1,98 @@
 # 当前能力与待办
 
-更新日期：2026-09-16
-
-本文只回答三件事：当前代码能做什么、哪些结果已经验证、下一步缺什么。
-具体命令见 [RUNBOOK.md](RUNBOOK.md)，室内实验细节见
-[INDOOR_GAZEBO_BENCHMARK.md](INDOOR_GAZEBO_BENCHMARK.md)。
+核对日期：2026-09-29。本文是当前状态入口；运行命令见 [RUNBOOK](RUNBOOK.md)。
 
 ## 当前主线
 
-当前正式仿真主线是 `SegFormer + GA-BSVM`：
+`RGB/LiDAR/IMU → FAST-LIO → SegFormer 完整后验 → GA-BSVM → 类别查询/接近点 → Nav2`。
+CLIP 保留为独立对照后端。短类别/颜色查询不等于任意自然语言理解，空间聚类不提供稳定实例 ID。
 
-```text
-RGB + LiDAR + IMU
-  -> FAST-LIO
-  -> SegFormer full posterior
-  -> camera-LiDAR projection
-  -> reliability-weighted Dirichlet fusion (GA-BSVM)
-  -> semantic map
-  -> language query
-  -> safe approach goal
-  -> Nav2
-```
-
-CLIP 仍保留为开放词汇对比后端，但不与 SegFormer 结果混为同一个 benchmark。
-
-一次运行必须显式选择一个 semantic profile：
-
-| Profile | 用途 | 可通行角色 | 默认 checkpoint |
-| --- | --- | --- | --- |
-| `outdoor13` | 原户外 13 类 | `road` | Cityscapes B0 |
-| `indoor7` | floor/wall/door/chair/table/shelf/bed + unknown | `floor` | ADE20K B0 |
-
-Profile 决定类别顺序、posterior 通道数、查询别名和导航角色。运行中不切换 profile；
-切换时重新启动语义地图，避免不同维度的证据混合。
-
-## 能力矩阵
-
-| 场景或能力 | 当前结论 | 不能据此宣称的内容 |
+| 配置 | 场景与类别 | 默认模型 |
 | --- | --- | --- |
-| M2DGR Bag 感知与语义建图 | 已有运行验证 | Bag 不能验证机器人导航执行 |
-| 户外 Go2 Gazebo | 已有建图、查询与导航工作路径 | 不代表室内参数自动适用 |
-| Small House 传感器启动 | RGB、Livox、IMU、FAST-LIO 启动门已工作 | 不代表长时间或运动定位精度 |
-| Indoor-7 SegFormer | ADE20K checkpoint 的七类标签均真实存在 | 标签存在不等于 Gazebo 场景识别准确 |
-| Indoor GA-BSVM | K=8 posterior、profile handshake、融合与查询失败关闭已验证 | 尚无完整室内类别精度评估 |
-| 室内负例 | nonqueryable、world-absent、unsupported、unresolved 均未错误发布 goal | 不证明正例导航成功 |
-| 室内 chair 正例 | 历史默认入口已有一次自动到达记录；也存在失败和无终态运行 | 不代表最新代码重复性或正式成功率通过 |
-| 室内 table 正例 | 查询可接受 | 当前场景未形成满足阈值的目标簇 |
-| Safe approach | 使用 traversable role、机器人同侧和距离约束；路径与碰撞检查交给 Nav2 | 尚无正式 Valid Goal Rate/碰撞率统计 |
-| 主动感知减速 | 节点、配置、状态和速度缩放链已接通 | 尚未完成 Recovery OFF/ON 收益对比 |
-| Lite3 | 电脑端配置与失败关闭保护保留 | 未授权真实运动；当前任务不验收实机 |
-| CARLA | 现有采集和可靠性实验资料保留 | 不属于当前 Gazebo 室内主线 |
+| `indoor7` | Small House；floor/wall/door/chair/table/shelf/bed + unknown，8 通道 | ADE20K B0 |
+| `outdoor13` | School Parking Lot、M2DGR；13 类，road 可通行 | Cityscapes B0 |
 
-## 核心实现边界
+一次运行固定一个 profile；切换时重启地图。Bookstore、Hospital 尚未接入。
 
-### 语义前端
+## 当前能力与证据
 
-- SegFormer 发布项目类别的完整 posterior，而不是只传 argmax mask。
-- raw checkpoint 类别先聚合为所选 project ontology，再进行硬判决。
-- checkpoint 不支持的查询必须返回 unsupported，不伪造概率。
-- CLIP 作为独立 backend 使用；选择 CLIP 时不同时启动 SegFormer。
+| 内容 | 已有证据 | 仍待验证 |
+| --- | --- | --- |
+| 室内感知与融合 | 8 通道完整后验、profile 检查、同帧检查和失败关闭；模型支持七类标签 | 场景识别精度与融合收益 |
+| 室内 chair 导航 | 9 月 16、18 日已有到达与停止录包 | 当前代码复测、重复成功率、碰撞率、有效接近点 |
+| 室内 table | 查询可接受，历史运行未形成满足门限的簇 | 区分模型、视角、融合与聚类问题 |
+| 户外/M2DGR | 保留建图、查询及户外 Gazebo 导航入口 | 当前版本复验；Bag 不证明导航执行 |
+| 主动感知 | 不确定性调速、输入过期降速、命令超时零速 | 匹配条件下 OFF/ON 收益 |
+| Lite3 | 静止采集/标定候选；9 月 26 日分别观察到隔离里程计桥、FAST-LIO 和实时语义融合输出 | 全链几何、运动同步、TF 权威、SDK 安全桥与导航 |
+| CARLA | 图像评估、三维可靠性和 Motion V2 离线诊断入口 | 当前 AURC 定义下重新评估；Motion V2 未进入在线主线 |
 
-### GA-BSVM 与查询
+Lite3 的 9 月 26 日融合检查在固定 `rslidar` 系进行，未同时运行 FAST-LIO/Nav2。
+用户报告低电量趴下、时刻未确认，因此不能作为全程静止或运动几何验收。
+IMU 历史对齐告警尚未查明；停止时的 Livox 转换异常已做限定修复与真实输入退出检查。
+详见 [实机交接](LITE3_REAL_HANDOFF.md)。
 
-- GA-BSVM 只有在 profile 名称、类别顺序和 posterior 维度一致时才融合。
-- 可靠度参与 Dirichlet 证据更新；无有效 IMU 对齐时使用保守可靠度。
-- `/query_target_pose` 是语义目标估计位置。
-- `/goal_pose` 是经过 traversability、侧向关系和距离约束的接近点；路径与碰撞检查由 Nav2 完成。
-- nonqueryable、unsupported、unresolved 和 not-ready 查询均失败关闭。
-- 日常查询使用后端无关的 `semantic_query` 一次性命令；旧 `clip_query` 仅作兼容别名。
+## 当前实现边界
 
-### 导航与速度链
+- 完整 posterior 先聚合项目类别概率；hard-mask 对照路线映射 raw argmax，两者输入表示不同。
+- 融合要求 profile、类别顺序、通道数一致；图像产物须同帧，LiDAR 允许近似同步。
+- 不支持、不可查询或证据未就绪时不发布目标。日常入口为 `semantic_query`，`clip_query` 是兼容别名。
+- 同类候选最多尝试两个，接近点有效后同时发布目标估计与导航目标；不包含 Nav2 失败后自动换实例。
+- 接近点保留可通行类别、置信度、物体距离与同侧约束；路径和碰撞检查由 Nav2 负责。
+- Gazebo 的 `nav2_sim_params.yaml` 保留障碍层、关闭 RPP 预测碰撞 veto；这不是无碰撞到达证明。
+- Lite3 保持 `projection_calibration_verified=false`、`goal_bridge_enabled=false`、`MOTION_READY=NO`；
+  `/cmd_vel_lite3_safe` 尚无底盘执行桥。
 
-- Gazebo Nav2 使用 `nav_sim.launch.py`，定位输入可选 `/Odometry`；该入口默认加载
-  `nav2_sim_params.yaml`。该仿真配置保留点云和语义障碍层，但关闭 RPP 的预测碰撞 veto，
-  让语义接近点能够完成最后一段到达；真实机入口继续使用 `nav2_params.yaml`。
-- `nav_goal_bridge_node` 把最新有效 `/goal_pose` 转换为一个活动 Nav2 action。
-- 主动感知节点根据路径附近熵和输入新鲜度发布 `/semantic_speed_scale`。
-- 仿真中键盘建图模式与自动导航模式不同时争用 `/cmd_vel_champ`。
-- 不增加绕过 Nav2 或底盘单写者约束的新命令通道。
+## 最新修改与验证
 
-## 室内 Small House 当前证据
+9 月 29 日修复：地图为空时发布更新以清除旧障碍；不确定性点云使用最新融合观测的源时间；
+AURC 对同分点使用排列期望。旧 AURC 与新结果比较前需要重算，历史报告不改写。
 
-组合入口 `semantic_sim.launch.py` 会等待控制器、连续稳定 IMU 窗口和新鲜非空
-LiDAR 后再启动 FAST-LIO。这个门解决了机器人出生/落地瞬态导致的初始化发散。
+新增 3 项回归测试。当前 429 项测试均通过：426 项在沙箱内通过，3 项本机通信/进程夹具
+因权限限制在沙箱外重跑通过。`git diff --check` 通过。本次未重跑构建、完整仿真或实机验收。
 
-已确认：
+此前已完成 hard-mask 同帧检查和目录整理：训练/单图工具在 `semantic_mapping/offline/`，
+仿真启动门在 `gazebo/`，共享模型检查在 `runtime/segformer_checkpoint.py`；ROS 命令名不变。
+历史清理和逐文件工作空间清单只保存在本机，不作为跨系统论文资料上传。
 
-- Small House 资产由 `go2_config` 管理；
-- benchmark manifest 由 `semantic_mapping` 管理；
-- SegFormer 发布 `16FC8` Indoor-7 posterior；
-- GA-BSVM 生成语义点云、熵和语义代价信息；
-- floor、场景不存在的 bed、profile 外的 car、checkpoint 不支持的 table 组合均按预期
-  失败关闭；
-- chair 可形成目标估计；使用 PointCloud2 FAST-LIO 输入和 Gazebo 专用 Nav2 配置的最近一次
-  隔离试验以 `SUCCEEDED` 结束，机器人实际位移约 1.40 m，`/Odometry` 未出现跳变；
-- 保留 RPP 预测碰撞 veto 的对照配置会在接近椅子时反复报告 `collision ahead` 并 `ABORTED`，
-  因而不能把该对照结果当作定位或速度故障；
-- table 正例尚未形成满足当前门限的稳定目标簇。
+## 保留的室内实验依据
 
-这些值是诊断证据，不是完整 benchmark 统计。原始运行日志不进入源码仓库；需要复现实验时
-由 runner 在 `/home/yk/ws/indoor_benchmark_runs/` 重新生成。
+- [9 月 15 日性能基线](results/indoor_gazebo_20260915_20260918/performance_20260915.md)：
+  建图/导航平均 RTF 约 0.469/0.398；缺导航终态，不计为成功或失败。
+- [9 月 16 日诊断](results/indoor_gazebo_20260915_20260918/chair_navigation_20260916.md)：到达与停止案例。
+- [9 月 18 日复测](results/indoor_gazebo_20260915_20260918/cloud_stride3_20260918.md)：
+  `SUCCEEDED`；墙钟 178.305 s、仿真时间 71.080 s。stride 配置由用户报告，Bag 无完整参数转储。
 
-## 2026-09-16 查询改动与验收边界
-
-- 同类候选按现有评分顺序最多尝试两个；规划器返回接近点决策后，ROS 节点统一发布。
-- 未找到接近点的候选不发布 target/goal；待处理查询仅在地图 revision 改变且达到重试间隔后重新评估。
-- 接近点快照先筛选本轮候选的搜索邻域，再计算语义置信度；共享只读快照，避免重复复制。
-- 查询与地图专项测试 54 项通过，完整测试 388 项通过、2 项跳过（含 benchmark 进程测试），
-  ROS 包构建通过；本次修改后尚未重跑 Gazebo。
-- 排序和重试状态仍主要由节点管理，查询模块架构整理尚未全部完成。
-
-2026-09-15 性能基线实际记录建图/导航阶段平均 RTF 约 0.469/0.398，
-GA-BSVM 平均单核 CPU 约 76.2%/92.3%。该次 chair 查询被 Nav2 接收，
-但日志缺少终态，因此不能计为成功或超时失败。原始采集与分析位于
-`/home/yk/ws/indoor_benchmark_runs/aws_small_house/20260915_045858_performance_baseline/README.md`。
-这些值是修改前基线，不证明本次优化已经改善运行性能。
-
-除真机外，仍需以本次发布版本补齐：固定流程的 chair 重复到达、两个同类目标的
-接近点回退、全部候选失败及地图变化后的重试、table 失败层定位、修改前后性能对照，
-以及独立的目标误差/有效接近点/无碰撞到达统计。主动减速和融合输入表示的收益
-仍需匹配条件的对照实验；跨场景泛化属于后续扩展验收。
+两次成功运行路线与录制内容不同，不能用作性能对照，也不覆盖后续代码修改。
+新实验写入 `/home/yk/ws/indoor_benchmark_runs/<world>/<timestamp>_<purpose>/`。
 
 ## 当前优先级
 
-1. 在 Small House 获得至少一个 chair 的可重复闭环到达案例。
-2. 判断 table 失败来自模型场景表现、可视范围还是融合/聚类阈值，不先放宽失败关闭门。
-3. 为成功案例补齐 target error、goal validity、collision-free arrival 和 approach distance。
-4. 用同一 case 对比主动减速关闭与开启；在这之前不宣称速度策略提升成功率。
-5. Small House 稳定后再接 Bookstore，Hospital 放在其后。
-6. Lite3 实机工作继续保持隔离和失败关闭，不阻塞当前室内仿真开发。
+1. 固定起点、观测/建图流程与输入，复测当前版本 chair 查询、到达和停止。
+2. 覆盖同类候选回退、全部候选失败及地图变化后重试；定位 table 失败层。
+3. 补齐目标误差、有效接近点、无碰撞到达与重复成功率，再比较融合输入和主动减速收益。
+4. Small House 稳定后扩展 Bookstore，再考虑 Hospital。
+5. Lite3 按交接文档推进 TF、同步、几何和 SDK 桥验收。
 
-## 专题文档
+## 文档分工
 
-- [RUNBOOK.md](RUNBOOK.md)：当前可执行命令与排障。
-- [INDOOR_GAZEBO_BENCHMARK.md](INDOOR_GAZEBO_BENCHMARK.md)：Indoor-7、资产、manifest 和实验结论。
-- [LITE3_REAL_HANDOFF.md](LITE3_REAL_HANDOFF.md)：实机交接和运动安全门。
-- [CARLA_IMAGE_BENCHMARK.md](CARLA_IMAGE_BENCHMARK.md)：CARLA 图像采集。
-- [CARLA_RELIABILITY_BENCHMARK.md](CARLA_RELIABILITY_BENCHMARK.md)：CARLA 可靠性实验。
-- [SEGFORMER_EBIKE_FINETUNE.md](SEGFORMER_EBIKE_FINETUNE.md)：电动自行车类别训练。
+| 文档 | 用途 |
+| --- | --- |
+| [RUNBOOK](RUNBOOK.md) | 当前启动、查询、排障和采集命令 |
+| [室内基准](INDOOR_GAZEBO_BENCHMARK.md) | 类别、资产、实验定义与验收指标 |
+| [Lite3 交接](LITE3_REAL_HANDOFF.md) | 实机已有证据与下一步门禁 |
+| [CARLA 图像](CARLA_IMAGE_BENCHMARK.md) / [可靠性](CARLA_RELIABILITY_BENCHMARK.md) | 两种离线评估流程 |
+| [电动自行车微调](SEGFORMER_EBIKE_FINETUNE.md) | 数据集、训练与模型验收；不表示已有合格模型 |
+| [室内结果摘要](results/indoor_gazebo_20260915_20260918/README.md) / [Lite3 观测摘要](results/lite3_20260924_20260926/README.md) | 可在其他系统查阅的历史结果与边界 |
 
-`docs/research/` 只保存有来源价值的背景调研，不是运行说明或当前状态来源。
+`research/` 是对应日期的调研；`results/` 是历史实验摘要；CARLA 原数据集与大型逐点文件当前缺失，不能直接复跑。两者均不替代当前状态或运行说明。
+`agents/` 保存协作流程。原始录包、图像和本机清单不随仓库同步。
 
 ## 查看实际工作区状态
 
-文档中的测试数字可能随代码继续变化。需要交接或发布时，以当前 Git 状态和一次新的定向检查
-为准：
-
 ```bash
-cd ~/ws/src/semantic_mapping
+cd /home/yk/ws/src/semantic_mapping
 git status --short
 git rev-parse --short HEAD
 ```
 
-发布后仍应核对当前工作区是否包含新增修改，不应把某个历史 commit 的测试结果套用到全部现状。
+以命令显示的实际分支和工作区为准；历史测试通过不能自动代表后续修改已验收。

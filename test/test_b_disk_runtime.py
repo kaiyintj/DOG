@@ -152,9 +152,10 @@ def _fake_environment(
     return environment, ros2
 
 
-def _run_check(environment, backend="clip"):
+def _run_check(environment, backend="clip", ontology_profile="outdoor13"):
     return subprocess.run(
-        [sys.executable, str(SCRIPT_PATH), "--backend", backend],
+        [sys.executable, str(SCRIPT_PATH), "--backend", backend,
+         "--ontology-profile", ontology_profile],
         capture_output=True,
         check=False,
         env=environment,
@@ -288,3 +289,23 @@ def test_cli_rejects_broken_cv_bridge_rgb_conversion(tmp_path):
     assert "IMPORT_CV_BRIDGE=PASS" in completed.stdout
     assert "CV_BRIDGE_RGB_ROUNDTRIP=FAIL" in completed.stdout
     assert "OVERALL=B_DISK_RUNTIME_NOT_READY" in completed.stdout
+
+
+def test_indoor_precheck_requires_ade20k_cache(tmp_path):
+    """A Cityscapes-only installation must not pass the indoor preflight."""
+    environment, unused_ros2 = _fake_environment(tmp_path, include_segformer=True)
+    _write_model_cache(environment, "segformer")
+    site = Path(environment["PYTHONPATH"])
+    for name, version in SEGFORMER_DISTRIBUTIONS.items():
+        _write_distribution(site, name, version)
+    for module_name in SEGFORMER_MODULES:
+        _write_module(site, module_name)
+    completed = _run_check(environment, "segformer", "indoor7")
+    assert completed.returncode == 1
+    assert "MODEL_CACHE_SEGFORMER=FAIL" in completed.stdout
+    hub = Path(environment["HF_HOME"]) / "hub"
+    (hub / MODEL_REPOSITORIES["segformer"]).rename(
+        hub / "models--nvidia--segformer-b0-finetuned-ade-512-512")
+    completed = _run_check(environment, "segformer", "indoor7")
+    assert completed.returncode == 0, completed.stdout + completed.stderr
+    assert "OVERALL=B_DISK_RUNTIME_READY" in completed.stdout

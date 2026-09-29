@@ -1,6 +1,7 @@
 """Regression tests for time-aware Dirichlet voxel fusion."""
 
 import numpy as np
+import pytest
 
 from semantic_mapping.runtime.voxel_map import VoxelMap
 
@@ -401,3 +402,44 @@ def test_ttl_pruning_preserves_legacy_voxel_without_timestamp_metadata():
 
     assert result['total'] == 0
     assert key in voxel_map.voxels
+
+
+@pytest.mark.parametrize('evidence_cap', [3.0, 1000.0])
+@pytest.mark.parametrize('retention', [0.0, 0.5, 0.995, 1.0])
+def test_pruning_before_delayed_observation_preserves_fusion(evidence_cap, retention):
+    """A delayed frame must give the same evidence at the same final time."""
+    maps = [VoxelMap(K=2, evidence_decay=retention,
+                     evidence_decay_reference_sec=1.0,
+                     max_total_evidence=evidence_cap,
+                     max_observation_weight=evidence_cap - 2.0)
+            for _ in range(2)]
+    point = np.array([[0.01, 0.01, 0.01]], dtype=np.float32)
+    for index, voxel_map in enumerate(maps):
+        voxel_map.update(point, np.ones(1), np.array([[4., 0.]]),
+                         features=np.array([[1., 0.]]), colors=np.array([[1., 0., 0.]]),
+                         timestamp_sec=10.)
+        if index:
+            voxel_map.prune(12.)
+        voxel_map.update(point, np.ones(1), np.array([[0., 4.]]),
+                         features=np.array([[0., 1.]]), colors=np.array([[0., 0., 1.]]),
+                         timestamp_sec=11.)
+        voxel_map.prune(12.)
+    first, second = [m.voxels[(0, 0, 0)] for m in maps]
+    for field in ('alpha', 'weight_sum', 'feature_weight_sum', 'color_weight_sum'):
+        np.testing.assert_allclose(first[field], second[field], atol=2e-6)
+    if first['weight_sum'] > 0:
+        for field in ('feature_512', 'color_rgb'):
+            np.testing.assert_allclose(first[field], second[field], atol=2e-6)
+    assert second['last_decay_at_sec'] == 12.
+    assert second['last_observed_at_sec'] == 11.
+
+
+def test_clock_rewind_remains_distinct_from_late_pruned_frame():
+    """A genuine observation-clock restart can establish a new time base."""
+    voxel_map = VoxelMap(K=2)
+    point = np.array([[0.01, 0.01, 0.01]])
+    voxel_map.update(point, np.ones(1), np.array([[4., 0.]]), timestamp_sec=10.)
+    voxel_map.prune(12.)
+    voxel_map.update(point, np.ones(1), np.array([[4., 0.]]), timestamp_sec=1.)
+    assert voxel_map.voxels[(0, 0, 0)]['last_decay_at_sec'] == 1.
+    assert voxel_map.voxels[(0, 0, 0)]['last_observed_at_sec'] == 1.

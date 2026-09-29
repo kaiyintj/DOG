@@ -2,6 +2,7 @@
 
 import os
 import time
+from types import SimpleNamespace
 
 import numpy as np
 import pytest
@@ -59,6 +60,14 @@ def test_actual_indoor_checkpoint_publishes_eight_channels_and_latched_capabilit
     try:
         frontend = SegformerNode()
         nodes.append(frontend)
+        interpolation_calls = []
+        interpolate = frontend.functional.interpolate
+
+        def tracked_interpolate(*args, **kwargs):
+            interpolation_calls.append(kwargs.get('size'))
+            return interpolate(*args, **kwargs)
+
+        frontend.functional = SimpleNamespace(interpolate=tracked_interpolate)
         # Both receivers start after the frontend's one-time capability publish.
         mapper = GABsvmNode()
         nodes.append(mapper)
@@ -95,6 +104,24 @@ def test_actual_indoor_checkpoint_publishes_eight_channels_and_latched_capabilit
         assert np.isfinite(posterior).all()
         np.testing.assert_allclose(posterior.sum(axis=-1), 1.0, atol=1e-3)
         assert posteriors[0].header == sources[0].header == image.header
+        assert interpolation_calls == []
+        # A late hard-mask consumer must enable compatible outputs on the next frame.
+        masks, confidences = [], []
+        probe.create_subscription(Image, frontend.class_mask_topic, masks.append,
+                                  qos_profile_sensor_data)
+        probe.create_subscription(Image, frontend.confidence_topic, confidences.append,
+                                  qos_profile_sensor_data)
+        wait_for(lambda: frontend.class_mask_pub.get_subscription_count() > 0
+                 and frontend.confidence_pub.get_subscription_count() > 0)
+        image.header.stamp = probe.get_clock().now().to_msg()
+        image_pub.publish(image)
+        wait_for(lambda: masks and confidences and len(posteriors) >= 2, seconds=30.)
+        assert interpolation_calls == [(64, 96)]
+        assert masks[0].header == confidences[0].header == image.header
+        assert masks[0].encoding == 'mono8'
+        assert confidences[0].encoding == '32FC1'
+        np.testing.assert_allclose(
+            posterior, posterior_image_to_array(posteriors[-1], expected_classes=8), atol=1e-3)
         assert mapper.get_parameter('projection_calibration_verified').value is False
     finally:
         executor.shutdown()

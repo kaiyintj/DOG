@@ -1,5 +1,10 @@
 import numpy as np
 
+from semantic_mapping.runtime.segformer_checkpoint import (
+    checkpoint_integrity,
+    verify_local_training_checkpoint,
+)
+
 from semantic_mapping.runtime.ga_bsvm_node import (
     GABsvmNode,
     normalize_frame_id,
@@ -13,7 +18,6 @@ from semantic_mapping.runtime.segformer_node import (
     find_supported_project_classes,
     raw_prediction_statistics,
     split_model_label,
-    verify_local_training_checkpoint,
 )
 from semantic_mapping.runtime.semantic_schema import DEFAULT_CLASSES
 from semantic_mapping.runtime.voxel_map import VoxelMap
@@ -23,8 +27,6 @@ def test_local_training_checkpoint_hash_is_enforced(tmp_path):
     checkpoint = tmp_path / 'best'
     checkpoint.mkdir()
     (checkpoint / 'config.json').write_text('{}', encoding='utf-8')
-
-    from semantic_mapping.runtime.segformer_training import checkpoint_integrity
 
     digest = checkpoint_integrity(checkpoint)['aggregate_sha256']
     verified, detail = verify_local_training_checkpoint(

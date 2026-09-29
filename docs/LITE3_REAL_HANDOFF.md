@@ -1,6 +1,6 @@
 # Lite3 实机下一阶段交接
 
-更新日期：2026-09-03
+核对日期：2026-09-29
 
 本文是开启新 Codex 窗口时的 Lite3 专用交接入口。新窗口应先读本文、项目根目录的
 [README.md](../README.md) 与 [AGENTS.md](../AGENTS.md)，再按需查阅
@@ -9,47 +9,49 @@
 
 ## 1. 当前结论
 
-当前已经完成并确认：
+实机仍为 `MOTION_READY=NO`。已有证据按日期区分：
 
-- Lite3 机载环境为 Ubuntu 20.04、ROS 2 Foxy、aarch64；
-- Mid360 点云 `/timefix/lidar` 约 10 Hz，Mid360 IMU `/timefix/imu` 约 200 Hz；
-- D435I 使用 `424x240@15Hz` 彩色和深度启动模式时，彩色图像和 CameraInfo 可稳定录制；
-- 三个独立 recorder、SQLite 检查、频率验收、消息时间戳审计和 USB 分级检查工具已经实现；
-- 2026-08-18 推荐静止 Bag 的四路消息频率、计数、共同时间窗和 header 连续性通过；
-- 录包接收时间有 0.43--0.68 秒调度间隔，只记为 `PASS_WITH_RECEIPT_WARN`；消息自身
-  header 连续，因此不解释为传感器断流；
-- Image 与 CameraInfo 在 1 ms 内匹配率为 100%，共同窗口内 LiDAR 到最近图像的 p99
-  时间差约 32.6 ms；
-- CameraInfo 内参稳定，但 `/tf_static` 中仍没有 `rslidar -> camera_color_optical_frame`
-  链路；
-- 2026-09-01 的六位姿 MID360--D435I 标定候选已通过独立留出验证、多距离/多方位实时
-  叠加和静止 SegFormer + GA-BSVM 安全融合，并已写入开发电脑的正式 Lite3 YAML；
-- 外参候选的变换约定是 `x_camera = R * x_rslidar + t`。真实 TF 树、动态运动同步和
-  `odom -> base_link` 唯一权威源仍未验收，因此 `projection_calibration_verified=false`；
-- 2026-09-02 的实机 TF 权威审计确认 `/motion_receiver` 虽注册 `/tf`，但没有发布动态
-  TF；其源码 `Jetson2Motion.cpp` 中两处 `sendTransform` 均被注释，`/leg_odom2` 未填写
-  `frame_id/child_frame_id`，并错误地用稳态时钟作为 ROS Header 时间。开发电脑源码新增
-  隔离桥接候选，只输出 `lite3_test_odom -> lite3_test_base_link` 和
-  `/diagnostics/lite3/leg_odom_fixed`；
-- 2026-09-02 隔离桥实机静止 120 秒验收通过：原始/修正消息分别为 24006/24007 条，
-  修正流 200.057 Hz，修正 Header 年龄 p95 为 4.4 ms、最大 21.6 ms，测试 TF/修正
-  Odometry 比为 0.999917，运动数据复制匹配率为 0.999375。全程未出现正式
-  `odom -> base_link`，`/cmd_vel` 发布者为 0；仍未完成受控运动方向和尺度验收；
-- 2026-08-23 已在 B 盘重建环境中用该 Bag 完成 FAST-LIO + CPU CLIP + GA-BSVM
-  离线复验，并在干净 `b86008d` 上得到 `ALGORITHM_STATIC_PASS_NON_GEOMETRIC`；
-- 烟测运行图中 `/cmd_vel` 发布者为 0，没有启动 Nav2、主动感知或运动桥。
+| 日期 | 已验证内容 | 边界 |
+| --- | --- | --- |
+| 8 月 18/23 日 | 四路静止采集、Header 审计；B 盘 FAST-LIO + CLIP + GA-BSVM 离线烟测 | `ALGORITHM_STATIC_PASS_NON_GEOMETRIC`，不证明运动几何 |
+| 9 月 1 日 | 六位姿外参候选、留出验证、多距离/方位叠加与静止融合 | 候选写入 Lite3 YAML；实时 TF 和运动投影未验收 |
+| 9 月 2 日 | 隔离里程计桥静止 120 秒输出检查 | 只发布测试帧；运动方向/尺度和正式 TF 权威未验收 |
+| 9 月 24/26 日 | 电脑端真实传感器接收、投影及隔离组件输出 | 详见下文；未通过导航闭环 |
 
-当前严格状态为：
+机载为 Ubuntu 20.04/Foxy/aarch64，电脑为 Humble。外参约定为
+`x_camera = R * x_rslidar + t`。原始 Bag 的 `/tf_static` 缺少雷达到相机光学帧链路，
+不能把 YAML 外参视为已有 TF 发布关系。
 
-```text
-SENSOR_HEADER_ALIGNMENT=PASS
-ALGORITHM_STATIC_PASS_NON_GEOMETRIC
-CALIBRATION_CANDIDATE_STATIC_PASS
-MOTION_READY=NO
-```
+9 月 2 日厂商 `/leg_odom2` 审计发现空 frame 和稳态时钟 Header；隔离桥只输出
+`lite3_test_odom -> lite3_test_base_link` 与 `/diagnostics/lite3/leg_odom_fixed`。
+正式 `odom -> base_link` 和 SDK 速度执行桥仍须验收。
 
-因此，静止采集、外参候选和静止语义融合已经形成可复现基线；下一步转向 TF 权威、
-SDK 安全桥和受控运动 Bag，仍不能据此让机器狗行走。
+### 9 月 24 日新增实机静止测试
+
+电脑经有线 ROS 2 链路收到约 10 Hz LiDAR、200 Hz IMU、15 Hz 图像/内参，并保留四组新 Bag。
+第四轮离线 SegFormer/投影报告仍在，三个采样帧 chair 像素为零；上一位置中间帧对照记录为
+2498 个 chair 像素、42 个雷达点。此结果不能证明稳定三维目标或外参精度。
+前三轮分析目录本次核对时缺失，原始录包仍在本机；第四轮可查
+[跨系统结果摘要](results/lite3_20260924_20260926/chair_projection_20260924.md)。
+这些新测试未运行完整 FAST-LIO/GA-BSVM/Nav2 链，实时雷达—相机 TF 仍待验收。
+若调整相机高度/俯仰，须重新标定；保持所有实机运动门禁。
+
+### 9 月 26 日电脑端隔离排查
+
+真实输入的隔离里程计桥、静止 FAST-LIO 和 Indoor-7 实时语义融合已分别观察到输出，
+未执行导航。融合的 60 秒功能检查通过，但用户随后报告曾因低电量趴下，具体时刻未确认；
+该窗口不能作为全程静止或运动几何验收。历史 IMU 对齐告警在追加的短时检查中未复现，
+原因尚未确认。
+
+已在真实 Livox 订阅边界确认并修正停止时的转换异常：ROS context 关闭后处理已知
+`take_message` RuntimeError；通信有效时与其他错误仍抛出。8 项 shutdown 定向测试通过，
+实测同一异常再次触发后正常退出 0。这项 Python 修正不解除实机门禁。
+完整排查见 [当前融合记录](results/lite3_20260924_20260926/static_fusion_20260926.md)。
+旧实验的保留用途与清理候选记录在 Linux 本机 `lite3_offline_runs/README.md`；
+普通短时排查复用已有目录，不默认录完整 Bag。
+
+同日 23:44 最后一次连接检查为有线 `DOWN/NO-CARRIER`，未进行数据验收。
+这是当时的连接状态；下次会话先确认现场供电、有线地址和传感器输入。
 
 ## 2. 当前必须保留的数据
 
@@ -78,8 +80,8 @@ SDK 安全桥和受控运动 Bag，仍不能据此让机器狗行走。
 
 - `/home/yk/ws/lite3_bags`：B 盘机器狗原始 Bag 归档，相当于实验“底片”，必须保留；
 - `/home/yk/ws/lite3_offline_runs`：B 盘的历史精简归档和当前完整烟测证据；
-- 未来重新执行脚本时，新运行仍默认写到 `/home/yk/lite3_offline_runs`；只有验收通过并
-  选为长期证据的运行才另行保留到 `/home/yk/ws/lite3_offline_runs`；
+- 新运行按 RUNBOOK 显式传 `--work-root /home/yk/ws/lite3_offline_runs`；脚本省略该参数时
+  仍默认写入 `~/lite3_offline_runs`，避免误把主目录与工作区中的同名目录混淆；
 - 当前推荐离线证据是
   `/home/yk/ws/lite3_offline_runs/lite3_clip_smoke_20260823T030733Z_wR2TtN`。它约 600 MiB，
   保留完整 `merged/`、`output_bag/`、报告和日志；manifest 绑定 `b86008d`、
@@ -119,13 +121,12 @@ manifest 与 `source_path.txt` 中的 `/home/yk/lite3_*` 是 2026-08-21 运行�
 - 隔离里程计桥：`semantic_mapping/runtime/lite3_odom_bridge_node.py`；
 - 完整传感器和离线命令：[RUNBOOK 第 8 节](RUNBOOK.md#8-lite3-实机传感器采集与上机前清单)。
 
-核心算法与实验基线为 `d27c103`，A 盘交接文档来源为 `f9b75de`。包含本文的 B 盘适配版本
-同步证据、交接入口、路径和搜索规则，新增只读校验/预检工具与开发环境约束；同时把
+历史算法与实验基线为 `d27c103`，A 盘交接来源为 `f9b75de`，B 盘完整复验绑定
+`b86008d`。这些版本证明当时的静止链路，不代表当前工作区代码已重新通过同样的实机验收。
+当前融合、查询及仿真配置的后续修改与验证边界见 [PROJECT_STATUS.md](PROJECT_STATUS.md)。
 后端无关的 `semantic_query` 是 `/text_query` 正式便捷发布器；`clip_query` 保留为兼容
-别名。选择 CLIP 时文本特征仍统一由正在运行的 `clip_node` 编码。
-这些调整不改变核心融合算法、正式 YAML 或既有实验证据。B 盘完整复验绑定 `b86008d`；
-其中 GA 退出修复只接受 context 已关闭后的 `RCLError`，真实 ROS 错误仍会抛出。
-实时 Git 状态统一按 [PROJECT_STATUS 第 9 节](PROJECT_STATUS.md#9-git-状态说明) 查询。
+别名。选择 CLIP 时文本特征仍由正在运行的 `clip_node` 编码。
+实时 Git 状态统一按 [当前工作区状态](PROJECT_STATUS.md#查看实际工作区状态) 查询。
 
 ## 4. 新窗口首先执行的任务
 
@@ -135,8 +136,8 @@ manifest 与 `source_path.txt` 中的 `/home/yk/lite3_*` 是 2026-08-21 运行�
 
 1. 保存机器狗真实 TF 树，核对 `rslidar`、`camera_color_optical_frame`、`base_link`、
    `odom` 的来源和父子关系；
-2. 完成 `rslidar -> camera_color_optical_frame` 外参标定，并用多距离、多方位目标做
-   重投影验收；
+2. 核对安装是否仍与 9 月 1 日静止标定候选一致，复用已有多距离/多方位验收；
+   安装改变才重新标定，运动条件下的投影仍待验收；
 3. 用隔离里程计桥验证厂商 `/leg_odom2` 的时间、方向和尺度；通过前不发布正式
    `odom -> base_link`；
 4. 只读调查云深处官方 SDK 的运动模式、状态反馈、急停和速度命令接口，设计
@@ -159,47 +160,26 @@ manifest 与 `source_path.txt` 中的 `/home/yk/lite3_*` 是 2026-08-21 运行�
 这三个终端只负责传感器和录包，不会让机器狗运动。当前推荐 Bag 已满足静止采集要求，
 除非设备安装、驱动配置或传感器模式发生变化，否则没有必要重复采集同一种静止数据。
 
-下一次真正有价值的实机会话，应优先做以下只读或静止工作：
-
-1. 保存完整 TF 树并确定唯一 `odom -> base_link` 权威源；
-2. 标定并验收 `rslidar -> camera_color_optical_frame` 外参；
-3. 查清厂商运动 SDK、模式切换、急停、状态反馈和速度命令接口；
-4. 明确受控运动 Bag 还要记录的底盘里程计、关节/足端状态、机器人模式、实际速度命令、
-   急停/看门狗状态和 `/tf`；话题名必须从机器狗实际接口确认，不能凭空假定。
-
 ## 6. 运动前不可跳过的阻塞项
 
 以下项目未完成前，不发布 `/cmd_vel`，不启动 Nav2 实机闭环：
 
-1. 完成真实 LiDAR--相机外参标定和多距离、多方位投影验收；
+1. 确认已有静止标定候选在当前安装下仍有效，并补齐受控运动投影验收；
 2. 统一 `/Odometry`、Nav2 odometry 和 `odom -> base_link`，保证只有一个权威发布者；
 3. 实现 `/cmd_vel_lite3_safe -> 云深处官方 SDK` 的唯一安全桥；
 4. 安全桥必须具有限速、模式/姿态检查、100--300 ms 命令超时自动零速、网络断开本地
    停车和独立急停；
 5. 用 `fast_lio_lite3_real.yaml` 验证受控运动 Bag，而不是把静止烟测配置用于运动；
-6. 修复或验收所有语义消息的源图时间戳和 GA-BSVM 历史 TF 查询；
+6. 在受控运动数据上验收已实现的源图时间戳传递和 GA-BSVM 历史 TF 查询；
 7. 最后才按“架空测试 -> 低速空场 -> 障碍环境”逐级解锁。
 
 当前仓库把实机速度链停在 `/cmd_vel_lite3_safe`，且没有下游执行桥；同时
 `projection_calibration_verified` 保持 `false`、Goal Bridge 默认关闭。这些是安全门禁，
 不能为了让狗先动起来而关闭。
 
-## 7. 可直接粘贴给新 Codex 窗口的开场消息
+## 7. 资料入口
 
-```text
-请先完整阅读：
-/home/yk/ws/src/semantic_mapping/README.md
-/home/yk/ws/src/semantic_mapping/AGENTS.md
-/home/yk/ws/src/semantic_mapping/docs/LITE3_REAL_HANDOFF.md
-/home/yk/ws/src/semantic_mapping/docs/PROJECT_STATUS.md
-/home/yk/ws/src/semantic_mapping/docs/RUNBOOK.md 的第 8 节。
-
-当前从 LITE3_REAL_HANDOFF.md 第 4 节继续。先在电脑端用
-/home/yk/ws/lite3_bags/lite3_concurrent_20260818_203250_HsW1R7
-和
-/home/yk/ws/lite3_offline_runs/lite3_clip_smoke_20260823T030733Z_wR2TtN
-作为当前静止基线。烟测已经得到 ALGORITHM_STATIC_PASS_NON_GEOMETRIC，不要重复运行，
-也不要把它当成 MOTION_READY。下一步只读检查真实 TF 树、LiDAR--相机外参结构和云深处
-SDK 接口；不要发布运动命令，不要启动 Nav2 实机闭环，不要修改
-projection_calibration_verified=false 或 goal_bridge_enabled=false。
-```
+采集与离线命令见 [RUNBOOK 第 8 节](RUNBOOK.md#8-lite3-实机传感器采集与上机前清单)；
+源码后续修改与最新测试见 [当前状态](PROJECT_STATUS.md)。
+[电脑/板载计算调研](research/LITE3_HOST_COMPUTE_FEASIBILITY_20260922.md) 是 9 月 22 日方案资料，
+不代表新硬件已验收。

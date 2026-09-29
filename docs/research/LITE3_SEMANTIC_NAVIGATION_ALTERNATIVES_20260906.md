@@ -1,6 +1,12 @@
 # Lite3 语义/语言导航替代路线研究
 
-日期：2026-09-06
+> 本文保留原调研日期的实验事实与建议；2026-09-29 已复核全文和引用入口。
+> 网页受限及无法复算的内容见文内说明，历史建议不表示已实施。
+> 现行能力与待办见 [PROJECT_STATUS](../PROJECT_STATUS.md)，操作见 [RUNBOOK](../RUNBOOK.md)。
+
+日期：2026-09-06。当前仍保留 SegFormer 完整后验 + GA-BSVM；以下轻量路径、
+按需 CLIP 和 VLM 均为候选设计。论文身份与摘要已由 [UCF 原始页面](https://stars.library.ucf.edu/etd2024/389/)复核，
+本轮未重新逐页核验论文，文内页码与细节保留为原调研记录。
 
 ## 结论摘要
 
@@ -50,7 +56,7 @@
 
 ## 3. 三条可落地路线
 
-### 路线 A：低算力闭集语言导航，推荐作为 Lite3 主路线
+### 路线 A：低算力闭集导航候选（未替换当前主线）
 
 目标示例：`去找人`、`去汽车旁边`、`到椅子附近`。
 
@@ -121,7 +127,7 @@ Lite3：驱动、状态、底盘安全桥、必要的 FAST-LIO/数据转发
 优点：能使用更强的 Grounding DINO/YOLO-World/SAM 或 VLM，语言表达能力最高；机器狗上的 CPU 竞争最小。
 缺点：增加网络、时间同步、DDS/序列化和断链处理；安全桥必须在网络断开时自动停车；系统验收复杂度最高。
 
-## 4. 推荐的取舍
+## 4. 当时的方案取舍（未实施）
 
 ### 如果目标是尽快在 Lite3 上部署
 
@@ -148,7 +154,7 @@ Lite3：驱动、状态、底盘安全桥、必要的 FAST-LIO/数据转发
 
 1. **先做几何导航基线**：FAST-LIO -> 2D LaserScan/障碍层 -> Nav2；暂时关闭语义节点和高密度点云保存。目标是确认实时性、TF 唯一性和安全桥，而不是语言能力。
 2. **接入低频闭集语义**：ADE20K/室外 checkpoint 每 0.5--1 秒推理一次；只发布目标候选和必要的 semantic costmap，不发布完整语义云。
-3. **接入目标确认与接近点**：保留现有同侧、直线净空、traversable 和 fail-closed 门禁；先用离线 Bag 和仿真测试。
+3. **接入目标确认与接近点**：保留同侧、traversable 和 fail-closed 门禁；直线净空检查已于 9 月 12 日从公共流程移除，路径/碰撞由 Nav2 处理；先用离线 Bag 和仿真测试。
 4. **再接开放查询**：CLIP 只在 `/text_query` 到达后运行；测试 `red car` 等已有能力，不直接增加 VLM。
 5. **最后评估伴随计算机**：只有当路线 A/B 在 Xavier NX 上仍无法满足延迟和最大 gap，再把语义或 FAST-LIO 迁移出去。
 
@@ -174,5 +180,4 @@ MOTION_READY=NO
 - 项目当前状态：[PROJECT_STATUS.md](../PROJECT_STATUS.md)
 - Lite3 交接：[LITE3_REAL_HANDOFF.md](../LITE3_REAL_HANDOFF.md)
 - 室内实现与证据：[INDOOR_GAZEBO_BENCHMARK.md](../INDOOR_GAZEBO_BENCHMARK.md)
-- 室内 profile 与当前验证结论：[INDOOR_GAZEBO_BENCHMARK.md](../INDOOR_GAZEBO_BENCHMARK.md)
 - Livox/Fast-LIO 减载调研：[LITE3_OPEN_SOURCE_LIVOX_CPU_PRACTICES_20260906.md](LITE3_OPEN_SOURCE_LIVOX_CPU_PRACTICES_20260906.md)

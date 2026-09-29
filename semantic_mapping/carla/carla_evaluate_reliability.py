@@ -58,7 +58,7 @@ from semantic_mapping.runtime.semantic_posterior import (
 )
 from semantic_mapping.runtime.semantic_projection import project_points_pinhole
 from semantic_mapping.runtime.semantic_schema import DEFAULT_CLASSES
-from semantic_mapping.runtime.segformer_training import checkpoint_integrity
+from semantic_mapping.runtime.segformer_checkpoint import checkpoint_integrity
 
 
 RELIABILITY_SCHEMA_VERSION = 2

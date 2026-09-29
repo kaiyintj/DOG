@@ -327,9 +327,11 @@ def _hf_cache_root():
     return Path.home() / ".cache" / "huggingface" / "hub"
 
 
-def _model_cache_check(backend):
+def _model_cache_check(backend, ontology_profile="outdoor13"):
     specification = MODEL_CACHE_REQUIREMENTS[backend]
     repository = specification["repository"]
+    if backend == "segformer" and ontology_profile == "indoor7":
+        repository = "nvidia/segformer-b0-finetuned-ade-512-512"
     repository_root = (
         _hf_cache_root()
         / "models--{}".format(repository.replace("/", "--"))
@@ -362,7 +364,7 @@ def _model_cache_check(backend):
     )
 
 
-def check_runtime(project_root, backend):
+def check_runtime(project_root, backend, ontology_profile="outdoor13"):
     """Return all checks exposed by the runtime readiness interface."""
     project_root = Path(project_root).resolve()
     if backend not in BACKEND_REQUIREMENTS:
@@ -373,18 +375,23 @@ def check_runtime(project_root, backend):
         for module_name in BASE_IMPORTS + BACKEND_IMPORTS[backend]
     )
     checks.append(_cv_bridge_rgb_roundtrip_check())
-    checks.append(_model_cache_check(backend))
+    checks.append(_model_cache_check(backend, ontology_profile))
     checks.extend(_ros_package_checks(backend))
     return checks
 
 
 def parse_args(argv=None):
-    """Parse the single varying runtime choice."""
+    """Select the backend and its default semantic-profile checkpoint."""
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
         "--backend",
         choices=sorted(BACKEND_REQUIREMENTS),
         default="clip",
+    )
+    parser.add_argument(
+        "--ontology-profile", choices=("outdoor13", "indoor7"),
+        default="outdoor13",
+        help="SegFormer default checkpoint to check (ignored for CLIP)",
     )
     return parser.parse_args(argv)
 
@@ -394,12 +401,14 @@ def main(argv=None):
     arguments = parse_args(argv)
     project_root = Path(__file__).resolve().parents[1]
     try:
-        checks = check_runtime(project_root, arguments.backend)
+        checks = check_runtime(
+            project_root, arguments.backend, arguments.ontology_profile)
     except RuntimeCheckError as error:
         print("ERROR={}".format(error), file=sys.stderr)
         return 2
 
     print("BACKEND={}".format(arguments.backend))
+    print("ONTOLOGY_PROFILE={}".format(arguments.ontology_profile))
     for check in checks:
         status = "PASS" if check.passed else "FAIL"
         print("{}={}".format(check.name, status))

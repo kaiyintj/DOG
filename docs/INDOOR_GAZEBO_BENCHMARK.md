@@ -1,9 +1,17 @@
 # Indoor-7 Gazebo benchmark
 
-更新日期：2026-09-14
+核对日期：2026-09-29
 
 本文保存室内方案、静态数据归属和可公开的当前结论。完整启动与操作命令见
 [RUNBOOK.md](RUNBOOK.md)。当前只验收 Gazebo，不涉及真实机器人运动。
+
+## 最近证据与适用版本
+
+9 月 16 日和 18 日 chair 录包已有 `SUCCEEDED`；9 月 18 日导航墙钟 178.305 s、
+仿真时间 71.080 s，成功后停止。两次路线和录制内容不同，不是性能对照。
+完整出处和当前代码待验收项见 [当前状态](PROJECT_STATUS.md)。
+下文早期 pilot 是对应日期的诊断，不能覆盖后续结果，也不能证明最新代码已重跑 Gazebo。
+现有 Gazebo 配置关闭 RPP 预测碰撞 veto，无碰撞到达仍需独立统计。
 
 ## 1. 范围
 
@@ -84,7 +92,7 @@ Small House 的 world、models、许可证和来源记录属于机器人仿真 p
 静态实验说明属于算法评测 package：
 
 ```text
-/home/yk/ws/src/semantic_mapping/benchmark/small_house_manifest.yaml
+/home/yk/ws/src/semantic_mapping/config/benchmark/small_house_manifest.yaml
 ```
 
 它记录目标模型名与 SDF pose、机器人起点、case、随机种子和 checkpoint。通俗地说：
@@ -99,7 +107,7 @@ world 是“考场”，manifest 是“试卷和标准答案”；把试卷放�
 /home/yk/ws/indoor_benchmark_runs/<world>/<run-id>/<case>/
 ```
 
-这里是和源码仓库分开的可重建产物目录。源码中的 `docs/` 只保存本文这种精简结论，不保存
+这里是和源码仓库分开的实验产物目录。可以重新开展实验，但已有录包和批次记录是独立历史证据，不能用新结果覆盖。源码中的 `docs/` 只保存本文这种精简结论，不保存
 日期化原始日志目录、诊断压缩包或大 JSON。
 
 ## 5. 模型能力门
@@ -132,31 +140,16 @@ model pose，属于模型原点，不是网格几何中心或可见表面。因�
 
 尚未取得独立证据的指标必须写 `not_evaluated`，不能从截图或算法输出反推 GT。
 
-## 7. 当前 Small House 结果
+## 7. 已有证据与当前结论
 
-| Case | 观察 | 结论 |
-| --- | --- | --- |
-| `validate_kitchen_close` | GT 静止位移 1.883 mm；FAST-LIO 8.648 mm | 起点与延迟初始化通过 |
-| `floor_nonqueryable` | 回执 nonqueryable；0 target/goal/bridge event | negative pass |
-| `bed_absent_control` | checkpoint accepted；派生 world 无 bed；0 target/goal | negative pass |
-| `car_outside_profile` | 回执 unresolved；0 target/goal | negative pass |
-| `table_unsupported_checkpoint` | Cityscapes 回执 unsupported；0 target/goal | negative pass |
-| `chair_kitchen` | 可形成 target；一次结果距最近 chair 原点 0.647 m；无合法 approach goal | positive navigation failed |
-| chair approach 诊断 | target error 0.333 m；goal 发布并被 Nav2 接受；机器人移动；结束距 goal 0.780 m | navigation failed |
-| Gazebo 默认 Nav2 复测（2026-09-14） | PointCloud2 FAST-LIO、默认 `nav_sim.launch.py` 和固定起点；`SUCCEEDED`，GT 位移约 1.17 m，`/Odometry` 无跳变 | feasibility pass |
-| `table_kitchen` | query accepted；没有 table 簇达到 runtime 门限 | query timeout |
+- 历史负例覆盖 floor 不可查询、无 bed 场景、profile 外 car、checkpoint 不支持 table。
+- chair 已有 9 月 16/18 日到达与停止记录；出处、适用版本及性能基线见
+  [当前状态](PROJECT_STATUS.md#保留的室内实验依据)。
+- table 历史正例未形成满足门限的目标簇；不能从 accepted 回执推断检测或导航成功。
+- 当前代码尚未完成闭环复测、重复性、碰撞率、SPL、有效接近点及主动减速收益统计。
 
-chair 诊断中的 Nav2 controller 两次报告 `Failed to make progress`。现有摘要不足以把原因
-归为 watchdog、速度下限或某个净空阈值。另一次带控制摘要的运行在更早的类别主导门被拒：
-chair 最高融合证据概率 0.320、raw posterior 0.275，但没有 chair 为主类别的体素。这个
-结果说明重复同一 case 或简单放宽控制参数不会产生新证据，应先改善观测或模型表现。
-
-当前可准确表述为：
-
-- Indoor-7 profile、后验传输、GA-BSVM 融合和失败关闭负例可运行；
-- Small House 的 chair 目标估计和 goal-to-Nav2 链已出现；
-- chair 已在 Gazebo 默认入口完成一次自动到达；重复性和多目标统计尚未通过；
-- collision-free、SPL、Valid Goal Rate 和主动减速收益尚未评估。
+已删除的早期 pilot 不作为当前结论依据。手动建图后导航与 runner 固定起点/观测窗口
+是不同实验流程，结果分别记录。
 
 ## 8. 下一步验收
 
@@ -183,11 +176,11 @@ RESULT_ROOT="/home/yk/ws/indoor_benchmark_runs"
 PILOT_ROOT="$RESULT_ROOT/aws_small_house/$(date +%Y%m%d_%H%M%S)_fusion_input"
 
 ros2 run semantic_mapping run_indoor_semantic_benchmark \
-  --manifest benchmark/small_house_manifest.yaml --case chair_kitchen \
+  --manifest config/benchmark/small_house_manifest.yaml --case chair_kitchen \
   --fusion-input full_posterior --output "$PILOT_ROOT/pair_01/full_posterior"
 
 ros2 run semantic_mapping run_indoor_semantic_benchmark \
-  --manifest benchmark/small_house_manifest.yaml --case chair_kitchen \
+  --manifest config/benchmark/small_house_manifest.yaml --case chair_kitchen \
   --fusion-input hard_mask_confidence --output "$PILOT_ROOT/pair_01/hard_mask_confidence"
 ```
 
@@ -199,20 +192,9 @@ ros2 run semantic_mapping run_indoor_semantic_benchmark \
 墙钟计时，因此不同负载下的结果不可直接归因于算法。未独立测量的碰撞率、有效 goal
 比例、SPL 和地图精度继续标记 `not_evaluated`。
 
-2026-09-09 首对诊断（批次 `20260909_fp_vs_hardpilot`）已实际运行：
-
-| 输入表示 | 次数 | 终止 | 最近同类模型原点 XY 距离 | 最终机器人到 goal 的 GT XY 距离 | 查询期间平均实时因子 |
-| --- | --- | --- | --- | --- | --- |
-| full_posterior | 1 | 120 秒墙钟超时 | 4.492 m | 5.407 m | 0.387 |
-| hard_mask_confidence | 1 | 120 秒墙钟超时 | 0.314 m | 0.733 m | 0.420 |
-
-两例的启动、查询接收和 Nav2 goal 接收均有记录，但均未验收到达。前者还超出当前
-1.5 m 目标原点容差。查询分别在仿真 17.255 s 和 29.190 s 发出，说明相同 seed 和
-warmup 下仍未获得相同的观测窗口；同一 seed 不保证语义融合接收同一组帧。
-因此这张表只用于发现评测缺口，不能据此断言 hard-mask 路径优于完整概率，也不是
-可靠度加权的消融证据。下一轮先固定输入或可复现的建图观测流程，核查目标与 GT 对齐，
-并预先规定仿真时间预算及独立的墙钟停滞上限，再扩样本。原始结果、命令和汇总保存在
-`/home/yk/ws/indoor_benchmark_runs/aws_small_house/20260909_fp_vs_hardpilot/`。
+早期两组预实验未获得相同的观测窗口，也均未验收到达；用户已决定删除这批不适合作
+当前结论的记录，因此不再列入结果表。下一轮先固定输入或可复现的建图观测流程，
+核查目标与 GT 对齐，并预先规定仿真时间预算及独立的墙钟停滞上限，再扩样本。
 
 ### 后续实验
 
@@ -227,6 +209,7 @@ warmup 下仍未获得相同的观测窗口；同一 seed 不保证语义融合�
 专用 Nav2 配置保留点云和语义障碍层，但关闭 RPP 的预测碰撞 veto；真实机继续使用带碰撞
 检查的 `nav2_params.yaml`。
 
-### 公共接近点流程（2026-09-12）
+### 公共接近点流程
 
-按用户要求，公共语义接近点流程不再执行候选点净空、直线路径净空或回退点净空检查；仿真、M2DGR 和 Lite3 配置移除了对应参数。路径规划与碰撞检查交给 Nav2。可通行类别、置信度、物体距离和机器人同侧筛选仍生效；实机标定及运动授权门槛保持不变。Gazebo 的 `nav2_sim_params.yaml` 保留障碍层但关闭 RPP 预测碰撞 veto，已在固定起点完成一次默认入口验收；旧批次配置仅用于历史溯源，不应覆盖。
+公共接近点筛选保留可通行类别、置信度、物体距离和机器人同侧约束，不做候选点或直线路径
+净空检查。路径规划与碰撞检查交给 Nav2；实机标定与运动门禁保持关闭。

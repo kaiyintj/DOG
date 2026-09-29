@@ -2,7 +2,6 @@
 """Validate data, fine-tune SegFormer, and inspect checkpoint label support."""
 
 import argparse
-import hashlib
 import json
 import random
 import re
@@ -10,6 +9,16 @@ from pathlib import Path
 
 import numpy as np
 from PIL import Image, ImageOps
+
+from semantic_mapping.runtime.segformer_checkpoint import (
+    DEFAULT_MIN_TARGET_IOU,
+    DEFAULT_MIN_ELECTRIC_BICYCLE_IOU,
+    DEFAULT_MIN_ROAD_IOU,
+    checkpoint_integrity,
+    load_training_report,
+    training_report_meets_thresholds,
+    find_threshold_failures,
+)
 
 from semantic_mapping.runtime.semantic_schema import (
     DEFAULT_CLASSES,
@@ -26,9 +35,6 @@ DEFAULT_REQUIRED_CLASSES = (
     'electric_bicycle',
     'motorcycle',
 )
-DEFAULT_MIN_TARGET_IOU = 0.30
-DEFAULT_MIN_ELECTRIC_BICYCLE_IOU = 0.35
-DEFAULT_MIN_ROAD_IOU = 0.50
 IMAGE_SUFFIXES = ('.jpg', '.jpeg', '.png', '.bmp', '.tif', '.tiff')
 REQUIRED_SPLITS = ('train', 'val')
 OPTIONAL_SPLITS = ('calibration', 'test')
@@ -265,36 +271,6 @@ def initialize_dataset_layout(dataset_root):
     return root
 
 
-def checkpoint_integrity(checkpoint):
-    """Return stable per-file and aggregate SHA-256 hashes for a checkpoint."""
-    checkpoint = Path(checkpoint).expanduser().resolve()
-    if not checkpoint.is_dir():
-        raise FileNotFoundError(
-            f'Checkpoint directory not found: {checkpoint}')
-    file_hashes = {}
-    aggregate = hashlib.sha256()
-    paths = sorted(path for path in checkpoint.rglob('*') if path.is_file())
-    for path in paths:
-        relative_path = path.relative_to(checkpoint).as_posix()
-        file_digest = hashlib.sha256()
-        with path.open('rb') as stream:
-            for block in iter(lambda: stream.read(1024 * 1024), b''):
-                file_digest.update(block)
-        digest = file_digest.hexdigest()
-        file_hashes[relative_path] = digest
-        aggregate.update(relative_path.encode('utf-8'))
-        aggregate.update(b'\0')
-        aggregate.update(bytes.fromhex(digest))
-    if not file_hashes:
-        raise DatasetValidationError(
-            f'Checkpoint contains no files to hash: {checkpoint}')
-    return {
-        'algorithm': 'sha256',
-        'aggregate_sha256': aggregate.hexdigest(),
-        'files': file_hashes,
-    }
-
-
 def _pad_to_minimum(image, mask, size):
     pad_width = max(0, size - image.width)
     pad_height = max(0, size - image.height)
@@ -525,39 +501,6 @@ def _evaluate_model(model, loader, device, use_fp16):
     return metrics
 
 
-def _acceptance_metrics(training_report):
-    """Choose final metrics, preferring an explicitly recorded test result."""
-    for key in ('acceptance_metrics', 'test_metrics', 'best_metrics'):
-        metrics = training_report.get(key)
-        if isinstance(metrics, dict):
-            return key, metrics
-    return None, {}
-
-
-def _threshold_failures(
-    metrics,
-    min_target_iou,
-    min_electric_bicycle_iou,
-    min_road_iou,
-):
-    """Return per-class failures for one immutable evaluation result."""
-    class_ious = metrics.get('per_class_iou', {})
-    failures = {}
-    for class_name in ('car', 'bicycle', 'motorcycle'):
-        value = float(class_ious.get(class_name, 0.0))
-        if value < min_target_iou:
-            failures[class_name] = value
-    electric_iou = float(class_ious.get('electric_bicycle', 0.0))
-    electric_minimum = max(
-        float(min_target_iou), float(min_electric_bicycle_iou))
-    if electric_iou < electric_minimum:
-        failures['electric_bicycle'] = electric_iou
-    road_iou = float(class_ious.get('road', 0.0))
-    if road_iou < min_road_iou:
-        failures['road'] = road_iou
-    return failures
-
-
 def train_segformer(args):
     """Fine-tune 13 classes and save the best validation checkpoint."""
     import torch
@@ -764,7 +707,7 @@ def train_segformer(args):
         if warning not in training_report['warnings']:
             training_report['warnings'].append(warning)
 
-    threshold_failures = _threshold_failures(
+    threshold_failures = find_threshold_failures(
         acceptance_metrics,
         args.min_target_iou,
         args.min_electric_bicycle_iou,
@@ -909,45 +852,6 @@ def checkpoint_report(
             schema_valid
             and (metrics_accepted or not require_training_report)),
     }
-
-
-def load_training_report(model_id):
-    """Load the nearest local training report for a checkpoint, if present."""
-    model_path = Path(str(model_id)).expanduser()
-    if not model_path.exists():
-        return None, None
-    candidates = (
-        model_path / 'training_report.json',
-        model_path.parent / 'training_report.json',
-    )
-    for candidate in candidates:
-        if candidate.is_file():
-            return (
-                candidate.resolve(),
-                json.loads(candidate.read_text(encoding='utf-8')),
-            )
-    return None, None
-
-
-def training_report_meets_thresholds(
-    training_report,
-    min_target_iou=DEFAULT_MIN_TARGET_IOU,
-    min_electric_bicycle_iou=DEFAULT_MIN_ELECTRIC_BICYCLE_IOU,
-    min_road_iou=DEFAULT_MIN_ROAD_IOU,
-):
-    """Independently verify saved metrics against runtime safety thresholds."""
-    if training_report is None:
-        return False, {'training_report': 'missing'}
-    if not training_report.get('accepted', False):
-        return False, {'training_report': 'training command did not accept it'}
-    _, metrics = _acceptance_metrics(training_report)
-    failures = _threshold_failures(
-        metrics,
-        min_target_iou,
-        min_electric_bicycle_iou,
-        min_road_iou,
-    )
-    return not failures, failures
 
 
 def _required_classes(value):

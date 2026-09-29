@@ -1,5 +1,4 @@
 #!/usr/bin/env python3
-from pathlib import Path
 import time
 
 import numpy as np
@@ -27,13 +26,13 @@ from semantic_mapping.runtime.semantic_profile_ros import (
     make_semantic_capability,
     semantic_capability_qos,
 )
-from semantic_mapping.runtime.segformer_training import (
+from semantic_mapping.runtime.segformer_checkpoint import (
     DEFAULT_MIN_ELECTRIC_BICYCLE_IOU,
     DEFAULT_MIN_ROAD_IOU,
     DEFAULT_MIN_TARGET_IOU,
-    checkpoint_integrity,
     load_training_report,
     training_report_meets_thresholds,
+    verify_local_training_checkpoint,
 )
 
 
@@ -185,30 +184,6 @@ def format_raw_statistics(region_statistics):
         for label, values in region_statistics['watched'].items()
     )
     return f'top=[{top}], watched=[{watched}]'
-
-
-def verify_local_training_checkpoint(model_id, training_report):
-    """Verify that a local checkpoint is the one bound to its report."""
-    if not isinstance(training_report, dict):
-        return False, 'training report is missing or invalid'
-    checkpoint_path = Path(str(model_id)).expanduser()
-    if not checkpoint_path.is_dir():
-        return False, 'checkpoint is not a local directory'
-    recorded_hash = training_report.get('checkpoint_sha256')
-    if not recorded_hash:
-        return False, 'training report has no checkpoint_sha256'
-    try:
-        current_hash = checkpoint_integrity(
-            checkpoint_path)['aggregate_sha256']
-    except (FileNotFoundError, OSError, ValueError) as exc:
-        return False, f'checkpoint hashing failed: {exc}'
-    if current_hash != recorded_hash:
-        return (
-            False,
-            f'checkpoint hash mismatch: recorded={recorded_hash}, '
-            f'current={current_hash}',
-        )
-    return True, current_hash
 
 
 class SegformerNode(Node):
@@ -493,6 +468,11 @@ class SegformerNode(Node):
                     for name, value in inputs.items()
                 }
 
+            log_due = (self.processed_count + 1) % self.log_every_n == 0
+            legacy_required = log_due or any(
+                publisher.get_subscription_count() > 0
+                for publisher in (self.class_mask_pub, self.raw_class_mask_pub,
+                                  self.confidence_pub, self.color_mask_pub))
             start = time.perf_counter()
             with self.torch.inference_mode():
                 native_logits = self.model(**inputs).logits.float()
@@ -508,31 +488,18 @@ class SegformerNode(Node):
                     )
                 )
 
-                raw_full_logits = self.functional.interpolate(
-                    native_logits,
-                    size=(height, width),
-                    mode='bilinear',
-                    align_corners=False,
-                )
-                raw_full_probabilities = self.torch.softmax(
-                    raw_full_logits / self.posterior_temperature,
-                    dim=1,
-                )
-                raw_confidence, raw_prediction = raw_full_probabilities.max(dim=1)
-
-            duration = time.perf_counter() - start
-
-            raw_mask = raw_prediction[0].cpu().numpy().astype(np.uint8)
-            raw_confidence_map = (
-                raw_confidence[0].cpu().numpy().astype(np.float32))
-            # Preserve the historical mask/confidence topics exactly as a
-            # regression baseline. The navigation fusion path consumes the
-            # complete project posterior published below instead.
-            confidence_map = raw_confidence_map
-            project_mask = self.project_lookup[raw_mask]
-            project_mask[confidence_map < self.confidence_threshold] = (
-                self.profile.unknown_id)
-            color_mask = self.project_colors[project_mask]
+                if legacy_required:
+                    raw_full_logits = self.functional.interpolate(
+                        native_logits,
+                        size=(height, width),
+                        mode='bilinear',
+                        align_corners=False,
+                    )
+                    raw_full_probabilities = self.torch.softmax(
+                        raw_full_logits / self.posterior_temperature,
+                        dim=1,
+                    )
+                    raw_confidence, raw_prediction = raw_full_probabilities.max(dim=1)
 
             posterior = project_native_probabilities[0].permute(
                 1, 2, 0).cpu().numpy()
@@ -543,26 +510,35 @@ class SegformerNode(Node):
             source_msg.header = msg.header
             self.source_image_pub.publish(source_msg)
 
-            class_msg = self.bridge.cv2_to_imgmsg(project_mask, encoding='mono8')
-            class_msg.header = msg.header
-            self.class_mask_pub.publish(class_msg)
+            if legacy_required:
+                raw_mask = raw_prediction[0].cpu().numpy().astype(np.uint8)
+                raw_confidence_map = raw_confidence[0].cpu().numpy().astype(np.float32)
+                confidence_map = raw_confidence_map
+                project_mask = self.project_lookup[raw_mask]
+                project_mask[confidence_map < self.confidence_threshold] = self.profile.unknown_id
+                color_mask = self.project_colors[project_mask]
+                if self.class_mask_pub.get_subscription_count() > 0:
+                    class_msg = self.bridge.cv2_to_imgmsg(project_mask, encoding='mono8')
+                    class_msg.header = msg.header
+                    self.class_mask_pub.publish(class_msg)
+                if self.raw_class_mask_pub.get_subscription_count() > 0:
+                    raw_class_msg = self.bridge.cv2_to_imgmsg(
+                        raw_mask, encoding='mono8')
+                    raw_class_msg.header = msg.header
+                    self.raw_class_mask_pub.publish(raw_class_msg)
+                if self.confidence_pub.get_subscription_count() > 0:
+                    confidence_msg = self.bridge.cv2_to_imgmsg(
+                        confidence_map, encoding='32FC1')
+                    confidence_msg.header = msg.header
+                    self.confidence_pub.publish(confidence_msg)
+                if self.color_mask_pub.get_subscription_count() > 0:
+                    color_msg = self.bridge.cv2_to_imgmsg(color_mask, encoding='rgb8')
+                    color_msg.header = msg.header
+                    self.color_mask_pub.publish(color_msg)
 
-            raw_class_msg = self.bridge.cv2_to_imgmsg(
-                raw_mask, encoding='mono8')
-            raw_class_msg.header = msg.header
-            self.raw_class_mask_pub.publish(raw_class_msg)
-
-            confidence_msg = self.bridge.cv2_to_imgmsg(
-                confidence_map, encoding='32FC1')
-            confidence_msg.header = msg.header
-            self.confidence_pub.publish(confidence_msg)
-
-            color_msg = self.bridge.cv2_to_imgmsg(color_mask, encoding='rgb8')
-            color_msg.header = msg.header
-            self.color_mask_pub.publish(color_msg)
-
+            duration = time.perf_counter() - start
             self.processed_count += 1
-            if self.processed_count % self.log_every_n == 0:
+            if log_due:
                 fractions = np.bincount(
                     project_mask.ravel(), minlength=self.profile.K)
                 fractions = fractions / max(project_mask.size, 1)

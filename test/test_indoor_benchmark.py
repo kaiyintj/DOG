@@ -16,7 +16,7 @@ from semantic_mapping.gazebo.indoor_benchmark import evaluate_case
 
 
 def test_runner_rejects_unknown_case_before_launching_simulation(tmp_path):
-    manifest = Path(__file__).resolve().parents[1] / 'benchmark/small_house_manifest.yaml'
+    manifest = Path(__file__).resolve().parents[1] / 'config/benchmark/small_house_manifest.yaml'
     output = tmp_path / 'result'
     process = subprocess.run([
         sys.executable, '-m', 'semantic_mapping.gazebo.indoor_benchmark',
@@ -33,7 +33,7 @@ def test_manifest_contains_static_inputs_not_historical_outcomes():
     import yaml
 
     root = Path(__file__).resolve().parents[1]
-    manifest = yaml.safe_load((root / 'benchmark/small_house_manifest.yaml').read_text())
+    manifest = yaml.safe_load((root / 'config/benchmark/small_house_manifest.yaml').read_text())
     assert manifest['schema_version'] == 1
     assert manifest['scenario_id'] == 'aws_small_house'
     assert 'acceptance_status' not in manifest
@@ -49,7 +49,7 @@ def test_runner_can_validate_a_candidate_start_without_querying(tmp_path, monkey
     import yaml
 
     root = Path(__file__).resolve().parents[1]
-    manifest = yaml.safe_load((root / 'benchmark/small_house_manifest.yaml').read_text())
+    manifest = yaml.safe_load((root / 'config/benchmark/small_house_manifest.yaml').read_text())
     manifest.update(warmup_sim_sec=1.0, startup_timeout_wall_sec=15.0)
     manifest['cases'].append({
         'id': 'validate_candidate',
@@ -87,7 +87,7 @@ def test_runner_rejects_absent_control_when_asset_is_in_world(tmp_path):
     import yaml
 
     root = Path(__file__).resolve().parents[1]
-    manifest = yaml.safe_load((root / 'benchmark/small_house_manifest.yaml').read_text())
+    manifest = yaml.safe_load((root / 'config/benchmark/small_house_manifest.yaml').read_text())
     control = next(case for case in manifest['cases'] if case['id'] == 'bed_absent_control')
     control['world_file'] = manifest['world_file']
     manifest_path = tmp_path / 'manifest.yaml'
@@ -112,7 +112,7 @@ def test_runner_executes_negative_case_and_stops_only_owned_simulator(
     import yaml
 
     root = Path(__file__).resolve().parents[1]
-    manifest = yaml.safe_load((root / 'benchmark/small_house_manifest.yaml').read_text())
+    manifest = yaml.safe_load((root / 'config/benchmark/small_house_manifest.yaml').read_text())
     manifest.update(warmup_sim_sec=1.0, negative_observation_wall_sec=.3,
                     startup_timeout_wall_sec=15.0)
     manifest_path = tmp_path / 'manifest.yaml'

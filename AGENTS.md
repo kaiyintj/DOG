@@ -54,9 +54,9 @@
 - The current rebuild evidence retains its full `merged/` and `output_bag/` payloads and
   records `ALGORITHM_STATIC_PASS_NON_GEOMETRIC`; it still records
   `motion_ready=false` and unverified extrinsics.
-- Locate the current archive verification procedure in the Lite3 handoff and referenced
-  verification scripts before claiming archive completeness. The former RUNBOOK section
-  8.9 reference is obsolete; if the current procedure is unavailable, report that limitation.
+- Before claiming archive completeness, use the compact-archive procedure in
+  [RUNBOOK section 8.9](docs/RUNBOOK.md#89-离线复现与迁移备份清单).
+  Keep its intentionally omitted payloads distinct from the full rebuild evidence.
 - Before claiming that B-disk ROS execution works, require
   `scripts/check_b_disk_runtime.py --backend <clip|segformer>` to report
   `OVERALL=B_DISK_RUNTIME_READY`; archive integrity and runtime readiness are separate.
@@ -76,7 +76,7 @@
 
 - Indoor Gazebo results belong in `/home/yk/ws/indoor_benchmark_runs/<world>/<timestamp>_<purpose>/`.
   Explain purpose, actual configuration, procedure and outcome in one batch README.
-  Source manifests stay in `benchmark/`; logs and recordings stay with their batch.
+  Source manifests stay in `config/benchmark/`; logs and recordings stay with their batch.
 - Match the tested procedure to the claim: manual mapping then navigation differs from
   stationary observation then querying. Logs alone are not sensor bags.
 - Separate startup failures, target/approach failures and navigation outcomes. One success

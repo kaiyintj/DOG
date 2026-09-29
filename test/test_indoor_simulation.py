@@ -240,7 +240,7 @@ def test_delayed_fastlio_rviz_selection_survives_go2_rviz_override(
 def test_small_house_manifest_targets_are_exact_sdf_model_origins():
     import xml.etree.ElementTree as ET
 
-    with (PROJECT_ROOT / 'benchmark/small_house_manifest.yaml').open() as stream:
+    with (PROJECT_ROOT / 'config/benchmark/small_house_manifest.yaml').open() as stream:
         manifest = yaml.safe_load(stream)
     worlds = PROJECT_ROOT.parent / 'unitree-go2-ros2/robots/configs/go2_config/worlds'
     world_path = worlds / manifest['world_file']

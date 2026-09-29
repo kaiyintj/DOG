@@ -1,5 +1,8 @@
 # CARLA 二维图像识别基准
 
+本文件是可选离线实验流程，命令入口已按 2026-09-29 本地代码核对；
+未重新运行 CARLA。当前主线与验证状态见 [PROJECT_STATUS](PROJECT_STATUS.md)。
+
 ## 1. 目的与边界
 
 这个基准只回答二维视觉问题：
@@ -16,7 +19,7 @@
 负责生成 RGB、语义真值和实例真值；同一份离线数据分别送入 CLIP 和 SegFormer，
 从而避免场景和时间差造成不公平比较。
 
-SegFormer 是闭集像素分类器，本项目默认映射 13 类。CLIP 是开放词汇模型，但当前
+本 CARLA 基准使用户外 13 类映射。CLIP 是开放词汇模型，但当前
 自动评分覆盖 CARLA 能提供真值的 road、person、car、truck、bus、bicycle、
 motorcycle 和车辆颜色。
 

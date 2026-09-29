@@ -1,5 +1,8 @@
 # CARLA 三维语义可靠性基准
 
+核对日期：2026-09-29。命令与当前代码对应；历史结果见
+[Motion V2 记录](results/carla_motion_v2_20260813/README.md)，不代表当前版本已重跑实验。
+
 ## 1. 目的、范围与旧基准的边界
 
 本基准独立评估 GA-BSVM 中一次三维语义观测的可信度是否与真实的点级
@@ -9,7 +12,8 @@
 普通 LiDAR + RGB -> SegFormer project posterior -> 点级预测
                                                 |
 Semantic LiDAR（仅 GT） -----------------------+-> 正确/错误
-IMU、量程、密度、视场、posterior 熵 -----------> 五个 reliability factor
+相机相对位姿、量程、密度、视场、posterior 熵 ---> 五个 reliability factor
+IMU -----------------------------------------> Motion V1 诊断
 ```
 
 它与 [CARLA_IMAGE_BENCHMARK.md](CARLA_IMAGE_BENCHMARK.md) 的边界如下：
@@ -74,9 +78,8 @@ print('地图:', client.get_world().get_map().name)
 "
 ```
 
-如果 CARLA 输出 `Waiting for master`、2000 端口已占用，或 client 超时，先停止旧的
-`gzserver`/CARLA 进程并只保留一个 CARLA server。不要把 Gazebo 端口问题当成
-CARLA 数据问题。
+client 超时时先核对 CARLA server、端口 2000 和 client/server 版本；只停止本次任务的旧进程。
+`Waiting for master` 属于 Gazebo 排查线索，不能据此判断 CARLA 数据异常。
 
 ## 3. 采集可复现实验数据
 
@@ -184,8 +187,8 @@ ros2 run semantic_mapping carla_evaluate_reliability \
 ```
 
 无 CUDA 时改为 `--device cpu` 并去掉 `--fp16`。评测不启动 ROS 图、FAST-LIO、
-GA-BSVM 节点或 Nav2；`--params-file` 仅用于读取与正式节点相同的可靠度和 VoxelMap
-参数，**不会修改 YAML 或在线运行参数**。
+GA-BSVM 节点或 Nav2；`--params-file` 用于读取共享的可靠度与 VoxelMap 参数，以及仅供离线 Motion V2
+评估使用的 `motion_rotation_scale_rad` / `motion_translation_scale_m`；实时 GA 节点不读取后两项，**不会修改 YAML 或在线运行参数**。
 
 正的 `--time-offset-ms d` 表示对 lidar 时刻 `t_l` 选用目标时刻
 `t_l - d` 附近、且绝不晚于 `t_l` 的历史 RGB。投影同时使用这张 RGB 自己记录的
@@ -277,21 +280,27 @@ metadata 时不猜测 car/truck/bus/bicycle/motorcycle 细类。
 不支持的 GT 类别仍写入 `per_point.csv`，但从 primary accuracy、ECE、NLL、Brier
 和融合 GT 统计中排除。`report.json` 会同时给出保留数、排除数和原因。
 
-## 7. 五个正式 reliability factor
+## 7. 可靠度因子与在线差异
 
-公式由 `reliability_factors.py` 统一实现，GA-BSVM 节点和离线评测调用同一套函数；
-参数由所传 `--params-file` 的 `ga_bsvm_node.ros__parameters` 读取。下面是当前
-`semantic_mapping_sim_livox.yaml` 的默认值，报告会写入实际使用值及其来源文件。
+共用公式在 `runtime/reliability_factors.py`；参数取自 YAML 的
+`ga_bsvm_node.ros__parameters`。**在线 GA-BSVM 使用 IMU Motion V1；本离线评测的
+`r_motion` 和 `w_full` 使用相机相对位姿 Motion V2，V1 仅记为 `r_motion_v1`。**
+Motion V2 未接入在线主线；历史体素消融未通过主要验收，不能称为已验证改进。
 
-| 因子 | 运行时定义 | 当前默认参数 |
+下表为本离线评测定义及 `semantic_mapping_sim_livox.yaml` 默认值：
+
+| 因子 | 离线评测定义 | 当前默认参数 |
 | --- | --- | --- |
-| motion | 在 `t_l` 前后 `imu_window_sec` 内取 \(\|\omega\|\)、\(\|a\|\)，计算 \(\omega_{rms}\) 与 \(a_{dev,rms}=\sqrt{mean(\|a\|-g)^2}\)，\(r_m=clip(exp[-0.5((\omega_{rms}/s_\omega)^2+(a_{dev,rms}/s_a)^2)],r_{min},1)\) | window=0.15 s, \(s_\omega=2.0\), \(s_a=3.0\), \(g=9.81\), \(r_{min}=0.2\)；无对齐 IMU 时为 0.2 |
+| motion（V2） | 参考 RGB 与选中历史 RGB 相机位姿之差：`clip(exp(-0.5*((Δθ/sθ)^2+(Δd/sd)^2)), r_min, 1)`；整帧同值 | `sθ=0.05 rad`、`sd=2.0 m`、`r_min=0.2` |
 | density | 仅在本帧、成功投影的 normal LiDAR 点中，以 0.3 m 3D 邻域计数（包含自身）\(d\)，\(r_d=1-e^{-d/s_d}\) | `density_scale=8.0` |
 | range | normal LiDAR sensor-local 三维量程 \(q=\|p\|_2\)，\(r_q=e^{-(q/s_q)^2}\) | `range_scale_m=20.0` |
 | view | \(\rho=clip(\sqrt{((u-W/2)/(W/2))^2+((v-H/2)/(H/2))^2}/\sqrt2,0,1)\)，\(r_v=clip(1-\lambda_v\rho^2,0.05,1)\) | `view_edge_penalty=0.4` |
 | semantic | posterior softmax 为 \(p\)，\(H=-\sum p\log p\)，\(r_s=f+(1-f)(1-H/\log K)\) | `semantic_confidence_floor=0.15`, \(K=13\) |
 
-最终正式组合为：
+在线 V1 使用对齐 IMU 的角速度 RMS 和加速度模偏离重力的 RMS；默认窗口 0.15 s、
+尺度 2.0 rad/s 和 3.0 m/s²、重力 9.81 m/s²，无对齐样本时降至 0.2。
+
+本离线评测的组合为：
 
 \[
 r_{combined}=r_{motion}r_{density}r_{range}r_{view}r_{semantic}.
@@ -322,8 +331,8 @@ gap；而 ECE 仅对 SegFormer top-label posterior confidence 计算。NLL 和 B
   `gt_supported`、`gt_source`、`pred_project_id`、`pred_class`、`correct`、
   `pred_confidence`、`gt_probability`、`semantic_entropy`；
 - 原始因子量：`range_m`、`local_density`、`view_radius`、`angular_rms`、
-  `accel_deviation`、`imu_status`；
-- 可靠度：`r_motion`、`r_density`、`r_range`、`r_view`、`r_semantic`、
+  `accel_deviation`、`imu_status`、`relative_rotation_rad`、`relative_translation_m`；
+- 可靠度：`r_motion`（V2）、`r_motion_v1`（诊断）、`r_density`、`r_range`、`r_view`、`r_semantic`、
   `r_combined`；
 - 消融权重：`w_none`、`w_semantic`、`w_semantic_range`、
   `w_semantic_range_density`、`w_semantic_range_density_view`、`w_full`；
@@ -353,6 +362,11 @@ brier, reliability_gap`。
 消融、可选 voxel 结果、样本/unsupported/失败关闭计数、warning 与 Git/代码版本。
 
 ## 9. 基础消融与可选短序列 VoxelMap
+
+AURC 按可靠度从高到低计算离散 risk–coverage 均值；同分组内部使用
+随机排列的期望风险，因此结果不依赖输入点顺序。无同分时保持原有定义。
+2026-09-29 之前的结果采用稳定排序，同分时可能受点顺序影响；历史文件保留，
+需要比较 AURC 时应使用当前实现重新评估相同数据。
 
 同一组点 posterior 不会因只改变 reliability weight 而改变单帧 argmax。因此
 `w_none` 到 `w_full` 的单帧结果应解释为“权重是否把更可信点排在前面”，而不能声称
@@ -395,9 +409,8 @@ uncertainty 和动态场景警告。若 ego 或目标运动，动态物体拖影
   容差和 fail-closed 降低错误 GT 风险，但不保证物理上完全同射线。
 - CARLA LiDAR measurement 是 frame 级输出；它不能完整复现真实旋转 LiDAR 每点的
   扫描内时序畸变。`lidar_tick`、rotation frequency 和 point counts 必须锁定并报告。
-- CARLA IMU 的 accelerometer 是否在给定版本/传感器设置下以与正式 `imu_gravity`
-  假设相同的重力语义输出，必须用静止实验核验。未核验前，motion 因子只应解释为
-  仿真传感器条件下的量，不应直接外推至实机。
+- CARLA IMU 的重力语义须用静止实验核验后再解释 `r_motion_v1`；
+  Motion V2 依赖仿真相机位姿，不能直接外推至实机。
 - `motion_angular_scale`、`motion_accel_scale`、density/range/view/entropy 参数是
   当前正式运行的经验配置；基准的作用是评估和为后续标定提供证据，**不应在本阶段
   调参后再宣称验证成功**。
