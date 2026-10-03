@@ -145,6 +145,38 @@ def make_node():
     return node, clock, client, logger, publisher
 
 
+def test_native_timer_expires_send_timeout_while_simulation_clock_is_paused(monkeypatch, tmp_path):
+    import time
+    import rclpy
+    from rclpy.time import Time
+    from semantic_mapping.runtime import nav_goal_bridge_node as bridge_module
+
+    monkeypatch.setenv('ROS_DOMAIN_ID', '226')
+    monkeypatch.setenv('ROS_LOCALHOST_ONLY', '1')
+    monkeypatch.setenv('ROS_LOG_DIR', str(tmp_path))
+    client = FakeActionClient()
+    client.outcomes.append(FakeFuture())
+    monkeypatch.setattr(bridge_module, 'ActionClient', lambda *args: client)
+    rclpy.init(args=[
+        '--ros-args', '-p', 'use_sim_time:=true',
+        '-p', 'retry_period_sec:=0.1', '-p', 'send_response_timeout_sec:=0.2'])
+    node = None
+    try:
+        node = NavGoalBridgeNode()
+        node.get_clock().set_ros_time_override(Time(seconds=10))
+        node.goal_pose_cb(make_goal())
+        token = node.send_attempt.token
+        deadline = time.monotonic() + 2.0
+        while node._send_timeout_warned_token != token and time.monotonic() < deadline:
+            rclpy.spin_once(node, timeout_sec=.05)
+        assert node.get_clock().now().nanoseconds == 10_000_000_000
+        assert node._send_timeout_warned_token == token
+    finally:
+        if node is not None:
+            node.destroy_node()
+        rclpy.shutdown()
+
+
 def accept_goal(node, client, pose, uuid_seed=1):
     send_future = FakeFuture()
     client.outcomes.append(send_future)

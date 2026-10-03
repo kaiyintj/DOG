@@ -126,6 +126,7 @@ def evaluate_case(case, recording):
             for event in recording['bridge_events'])
         passed = (
             recording['termination'] == 'nav_terminal' and completed
+            and recording.get('stop_observation', {}).get('passed') is True
             and metrics['target_to_gt_model_origin_xy_m'] <= case['target_origin_tolerance_xy_m']
             and metrics['final_robot_to_goal_gt_xy_m'] <= .5)
         result.update(
@@ -186,12 +187,19 @@ def _load_case(manifest_path, case_id):
         if not absent_assets:
             raise ValueError('Accepted absent-target control requires world_absent_assets')
     case.setdefault('startup_timeout_wall_sec', 180.0)
+    case.setdefault('query_timeout_sim_sec', 90.0)
+    case.setdefault('stop_observation_sim_sec', 5.0)
     for name in ('startup_timeout_wall_sec', 'warmup_sim_sec', 'query_timeout_wall_sec',
+                 'query_timeout_sim_sec', 'stop_observation_sim_sec',
                  'negative_observation_wall_sec'):
         if not math.isfinite(float(case[name])) or float(case[name]) <= 0:
             raise ValueError(f'{name} must be finite and positive')
     if not isinstance(case['seed'], int) or not 0 <= case['seed'] < 2**32:
         raise ValueError('seed must be a Gazebo uint32')
+    if case.get('mapping_pitch_rad'):
+        pitch, hold = float(case['mapping_pitch_rad']), float(case['mapping_pitch_hold_sim_sec'])
+        if not math.isfinite(pitch) or not 0 < pitch <= .3 or not math.isfinite(hold) or hold <= 0:
+            raise ValueError('Mapping sweep requires pitch in (0,.3] and a positive hold')
     start_values = [*starts[0]['pose'], starts[0]['spawn_height_m']]
     if len(start_values) != 4 or not all(math.isfinite(float(v)) for v in start_values):
         raise ValueError('Invalid spawn pose')

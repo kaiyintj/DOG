@@ -12,6 +12,7 @@ from action_msgs.msg import GoalStatus
 from geometry_msgs.msg import PoseStamped
 from nav2_msgs.action import NavigateToPose
 import rclpy
+from rclpy.clock import Clock, ClockType
 from rclpy.action import ActionClient
 from rclpy.executors import ExternalShutdownException
 from rclpy.node import Node
@@ -117,7 +118,8 @@ class NavGoalBridgeNode(Node):
             10,
         )
         self.retry_timer = self.create_timer(
-            retry_period_sec, self.try_dispatch_pending_goal)
+            retry_period_sec, self.try_dispatch_pending_goal,
+            clock=Clock(clock_type=ClockType.STEADY_TIME))
 
         self._initialize_transaction_state()
 

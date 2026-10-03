@@ -164,6 +164,7 @@ def successful_recording():
     }
     recording = {
         'termination': 'nav_terminal', 'readiness': {'passed': True},
+        'stop_observation': {'passed': True},
         'query': {'sent': True, 'ack': 'accepted', 'stamp': 11.0},
         'alignment': {'truth': pose([10, 20, 0], math.pi / 2, 'world', 10.0),
                       'estimate': pose([1, 2, 0], stamp=10.0)},
@@ -215,6 +216,128 @@ def test_nav2_success_without_matching_accepted_goal_is_not_success(successful_r
     case, recording = successful_recording
     recording['bridge_events'][1]['nav2_goal_id'] = 'unrelated-goal'
     assert evaluate_case(case, recording)['passed'] is False
+
+
+def test_nav2_success_requires_observed_stop(successful_recording):
+    case, recording = successful_recording
+    recording.pop('stop_observation')
+    assert evaluate_case(case, recording)['passed'] is False
+
+
+@pytest.mark.parametrize('displacement,speed,new_samples,passed', [
+    (.01, 0.0, 100, True), (.10, 0.0, 100, False),
+    (.01, .05, 100, False), (.01, 0.0, 0, False),
+])
+def test_stop_observation_waits_for_ground_truth_and_new_commands(
+    displacement, speed, new_samples, passed,
+):
+    from semantic_mapping.gazebo.observation import BenchmarkObserver
+
+    control = {'count': 10, 'last': {'linear_x': 0.0, 'linear_y': 0.0, 'angular_z': 0.0}}
+    observer = SimpleNamespace(case={'stop_observation_sim_sec': 5.0},
+                               recording={'control': {'filtered_cmd': control}})
+    assert not BenchmarkObserver._stop_complete(observer, {'truth': pose([0, 0, 0], stamp=10)})
+    control['count'] += new_samples
+    control['last']['linear_x'] = speed
+    assert not BenchmarkObserver._stop_complete(
+        observer, {'truth': pose([displacement, 0, 0], stamp=14)})
+    assert BenchmarkObserver._stop_complete(
+        observer, {'truth': pose([displacement, 0, 0], stamp=15)})
+    assert observer.recording['stop_observation']['passed'] is passed
+
+
+@pytest.mark.parametrize('sim_step,wall_limit,reason', [
+    (1.0, 100.0, 'query_sim_timeout'), (.01, 1.0, 'query_timeout'),
+])
+def test_query_uses_simulation_budget_with_separate_wall_limit(
+    monkeypatch, sim_step, wall_limit, reason,
+):
+    from semantic_mapping.gazebo import observation
+
+    observer = object.__new__(observation.BenchmarkObserver)
+    observer.case = {
+        'expected': 'navigation_success', 'query': 'chair',
+        'startup_timeout_wall_sec': 5.0, 'query_timeout_wall_sec': wall_limit,
+        'query_timeout_sim_sec': 3.0,
+    }
+    observer.recording = {
+        'sim_time': 10.0, 'readiness': {}, 'query': {}, 'target_poses': [],
+        'goal_poses': [], 'bridge_events': [],
+    }
+    observer.poses = {'truth': deque(), 'estimate': deque()}
+    observer._live_problem = lambda **kwargs: None
+    observer._stationary_problem = lambda: None
+    observer.query_publisher = SimpleNamespace(publish=lambda message: None)
+    wall = [0.0]
+    monkeypatch.setattr(observation.time, 'monotonic', lambda: wall[0])
+
+    def spin_once(timeout_sec):
+        wall[0] += .1
+        observer.recording['sim_time'] += sim_step
+        for name, frame in (('truth', 'world'), ('estimate', 'odom')):
+            observer.poses[name].append(pose([0, 0, 0], frame=frame,
+                                             stamp=observer.recording['sim_time']))
+
+    observer.ros_executor = SimpleNamespace(spin_once=spin_once)
+    observer.observe(SimpleNamespace(poll=lambda: None))
+    assert observer.recording['termination'] == reason
+    query = observer.recording['query']
+    if reason == 'query_sim_timeout':
+        assert query['observed_sim_sec'] == pytest.approx(3.0)
+        assert query['observed_wall_sec'] < wall_limit
+    else:
+        assert query['observed_sim_sec'] < 3.0
+        assert query['observed_wall_sec'] >= wall_limit
+
+
+def test_mapping_pitch_sweep_waits_for_real_pose_feedback_and_restores_height():
+    from semantic_mapping.gazebo.observation import BenchmarkObserver
+    from scipy.spatial.transform import Rotation
+
+    commands = []
+    observer = SimpleNamespace(
+        case={'mapping_pitch_rad': .3, 'mapping_pitch_hold_sim_sec': 10.0},
+        recording={'sim_time': 20.0},
+        poses={name: deque([pose([0, 0, 0])]) for name in ('truth', 'estimate')},
+        body_pose_publisher=SimpleNamespace(publish=commands.append),
+    )
+    assert not BenchmarkObserver._mapping_step(observer)
+    observer.recording['sim_time'] = 23.0
+    assert not BenchmarkObserver._mapping_step(observer)
+    command = commands[-1]
+    assert command.position.z == 0.0
+    assert Rotation.from_quat([
+        command.orientation.x, command.orientation.y,
+        command.orientation.z, command.orientation.w,
+    ]).as_euler('xyz')[1] == pytest.approx(.3)
+    # Sending a pose alone is insufficient evidence that the body moved.
+    observer.recording['sim_time'] = 41.0
+    assert not BenchmarkObserver._mapping_step(observer)
+    for values in observer.poses.values():
+        values[-1]['orientation'] = Rotation.from_euler('y', .28).as_quat().tolist()
+    assert not BenchmarkObserver._mapping_step(observer)  # Still tilted.
+    for values in observer.poses.values():
+        values[-1]['orientation'] = [0, 0, 0, 1]
+    assert BenchmarkObserver._mapping_step(observer)
+    assert commands[-1].orientation.w == 1.0
+    assert commands[-1].orientation.y == 0.0
+    assert observer.recording['mapping_observation']['completed']
+
+
+def test_plan_observation_distinguishes_path_endpoint_from_original_goal():
+    from nav_msgs.msg import Path
+    from geometry_msgs.msg import PoseStamped
+    from semantic_mapping.gazebo.observation import BenchmarkObserver
+
+    observer = SimpleNamespace(recording={'goal_poses': [pose([2.0, 0, 0])]})
+    path = Path()
+    path.header.frame_id = 'odom'
+    path.poses = [PoseStamped(), PoseStamped()]
+    path.poses[-1].pose.position.x = 1.5
+    BenchmarkObserver._plan(observer, path)
+    last = observer.recording['plan']['last']
+    assert last['endpoint_to_goal_xy_m'] == .5
+    assert last['length_xy_m'] == 1.5
 
 
 def test_negative_case_needs_full_live_observation_and_query_ack(successful_recording):

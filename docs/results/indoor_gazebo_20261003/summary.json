@@ -1,0 +1,538 @@
+{
+  "purpose": "Small public extract of the 2026-10-03 indoor Gazebo debugging batch; full raw evidence retained locally.",
+  "world": "aws_small_house",
+  "seed": 7,
+  "source_baseline_commit": "ecbb89d87a69a54da9bef53f8581aa1eb5ef4d10",
+  "source_baseline_note": "Baseline plus the tested working-tree changes; not the later publication commit.",
+  "model": {
+    "id": "nvidia/segformer-b0-finetuned-ade-512-512",
+    "revision": "489d5cd81a0b59fab9b7ea758d3548ebe99677da",
+    "ontology_profile": "indoor7",
+    "device": "cuda"
+  },
+  "count": {
+    "attempts": 12,
+    "complete_function_pass": 1,
+    "complete_function_fail": 11
+  },
+  "comparison_scope": "Debugging attempts used different starts, parameters and procedures; no matched-condition success rate or benefit estimate.",
+  "final_procedure": {
+    "manifest_case": "chair_kitchen_mapping_pitch",
+    "nominal_start_xy_yaw": [
+      5.0,
+      2.4,
+      -1.3
+    ],
+    "warmup_sim_sec": 15.0,
+    "mapping_pitch_rad": 0.3,
+    "mapping_pitch_ramp_sim_sec": 3.0,
+    "mapping_pitch_hold_sim_sec": 10.0,
+    "mapping_pitch_restore_sim_sec": 3.0,
+    "mapping_post_restore_observation_sim_sec": 5.0,
+    "query_timeout_sim_sec": 90.0,
+    "query_timeout_wall_sec": 300.0,
+    "stop_observation_sim_sec": 5.0
+  },
+  "final_parameters": {
+    "query_approach_radius_m": 2.5,
+    "query_approach_distance_m": 1.4,
+    "query_approach_min_distance_m": 1.3,
+    "query_require_robot_side": true,
+    "query_approach_robot_height_m": 0.225,
+    "query_approach_ground_tolerance_m": 0.1,
+    "segformer_cloud_publish_every_n_processed": 1,
+    "min_speed_ratio": 0.65,
+    "unknown_speed_ratio": 0.65,
+    "nav2_xy_tolerance_m": 0.25
+  },
+  "acceptance_reference": {
+    "target": "nearest same-class SDF top-level model origin",
+    "target_origin_tolerance_xy_m": 1.5,
+    "robot_to_goal_gt_tolerance_xy_m": 0.5,
+    "gt_used_for_prediction": false,
+    "formal_safe_approach_passed": false
+  },
+  "successful_run_observation": {
+    "mapping": {
+      "start_sim_sec": 17.635,
+      "commanded_pitch_rad": 0.3,
+      "max_observed_pitch_rad": {
+        "truth": 0.3159505455331124,
+        "estimate": 0.3267167743678854
+      },
+      "completed": true,
+      "truth_final_pitch_rad": -0.0033034268363092423,
+      "estimate_final_pitch_rad": 0.007857295017631438,
+      "observed_sim_sec": 21.005
+    },
+    "max_robot_alignment_error_m": 0.034830163953124306,
+    "plan": {
+      "count": 17,
+      "last": {
+        "stamp": 46.12,
+        "frame": "odom",
+        "endpoint_xy": [
+          0.8999999880790713,
+          0.3499999940395355
+        ],
+        "length_xy_m": 0.25248665075449456,
+        "endpoint_to_goal_xy_m": 0.04999999999999971
+      }
+    }
+  },
+  "raw_batch_location": "/home/yk/ws/indoor_benchmark_runs/aws_small_house/20261003_timing_fixes",
+  "attempts": [
+    {
+      "attempt": 1,
+      "output_directory": "chair_navigation",
+      "case_id": "chair_kitchen",
+      "passed": false,
+      "reason": "semantic_not_fresh",
+      "termination": "semantic_not_fresh",
+      "query_timing": {
+        "observed_sim_sec": 1.9100000000000001,
+        "observed_wall_sec": 4.106680543999801
+      },
+      "natural_nav2_succeeded": false,
+      "metrics": {
+        "safe_approach_surface_distance": "not_evaluated",
+        "valid_goal_rate": "not_evaluated",
+        "collision_rate": "not_evaluated",
+        "navigation_success_rate": "not_evaluated",
+        "spl": "not_evaluated"
+      },
+      "stop_observation": null,
+      "remaining_owned_pids": []
+    },
+    {
+      "attempt": 2,
+      "output_directory": "chair_navigation_02",
+      "case_id": "chair_kitchen",
+      "passed": false,
+      "reason": "query_sim_timeout",
+      "termination": "query_sim_timeout",
+      "query_timing": {
+        "observed_sim_sec": 90.025,
+        "observed_wall_sec": 193.885715786
+      },
+      "natural_nav2_succeeded": false,
+      "metrics": {
+        "safe_approach_surface_distance": "not_evaluated",
+        "valid_goal_rate": "not_evaluated",
+        "collision_rate": "not_evaluated",
+        "navigation_success_rate": "not_evaluated",
+        "spl": "not_evaluated"
+      },
+      "stop_observation": null,
+      "remaining_owned_pids": []
+    },
+    {
+      "attempt": 3,
+      "output_directory": "chair_dining_southeast",
+      "case_id": "chair_dining_southeast",
+      "passed": false,
+      "reason": "navigation_failed",
+      "termination": "query_sim_timeout",
+      "query_timing": {
+        "observed_sim_sec": 90.0,
+        "observed_wall_sec": 212.1272183760002
+      },
+      "natural_nav2_succeeded": false,
+      "metrics": {
+        "safe_approach_surface_distance": "not_evaluated",
+        "valid_goal_rate": "not_evaluated",
+        "collision_rate": "not_evaluated",
+        "navigation_success_rate": "not_evaluated",
+        "spl": "not_evaluated",
+        "nearest_gt_id": "chaira_01_003",
+        "target_world_xyz": [
+          4.824904916536583,
+          2.323804103879609,
+          0.46280355929095995
+        ],
+        "target_to_gt_model_origin_xy_m": 1.398489293288896,
+        "target_to_gt_model_origin_3d_m": 1.4699671311802307,
+        "goal_to_estimated_target_xy_m": 1.188611795484765,
+        "final_robot_to_goal_gt_xy_m": 1.510221011669467,
+        "goal_world_xyz": [
+          5.888206511965825,
+          1.7925906651159182,
+          0.10077113628146586
+        ]
+      },
+      "stop_observation": null,
+      "remaining_owned_pids": []
+    },
+    {
+      "attempt": 4,
+      "output_directory": "chair_kitchen_facing",
+      "case_id": "chair_kitchen_facing",
+      "passed": false,
+      "reason": "navigation_failed",
+      "termination": "query_sim_timeout",
+      "query_timing": {
+        "observed_sim_sec": 90.0,
+        "observed_wall_sec": 202.19120835000012
+      },
+      "natural_nav2_succeeded": false,
+      "metrics": {
+        "safe_approach_surface_distance": "not_evaluated",
+        "valid_goal_rate": "not_evaluated",
+        "collision_rate": "not_evaluated",
+        "navigation_success_rate": "not_evaluated",
+        "spl": "not_evaluated",
+        "nearest_gt_id": "chaira_01_001",
+        "target_world_xyz": [
+          6.764741974732909,
+          0.33636034103693646,
+          0.4933539570637354
+        ],
+        "target_to_gt_model_origin_xy_m": 0.3728355099853477,
+        "target_to_gt_model_origin_3d_m": 0.5988797114790614,
+        "goal_to_estimated_target_xy_m": 0.9919273544940639,
+        "final_robot_to_goal_gt_xy_m": 0.32406831755793103,
+        "goal_world_xyz": [
+          5.927432775156485,
+          0.868180969537073,
+          0.16314610682077274
+        ]
+      },
+      "stop_observation": null,
+      "remaining_owned_pids": []
+    },
+    {
+      "attempt": 5,
+      "output_directory": "chair_kitchen_facing_standoff14",
+      "case_id": "chair_kitchen_facing",
+      "passed": false,
+      "reason": "navigation_failed",
+      "termination": "semantic_not_fresh",
+      "query_timing": {
+        "observed_sim_sec": 73.99000000000001,
+        "observed_wall_sec": 187.9546006640012
+      },
+      "natural_nav2_succeeded": false,
+      "metrics": {
+        "safe_approach_surface_distance": "not_evaluated",
+        "valid_goal_rate": "not_evaluated",
+        "collision_rate": "not_evaluated",
+        "navigation_success_rate": "not_evaluated",
+        "spl": "not_evaluated",
+        "nearest_gt_id": "chaira_01_003",
+        "target_world_xyz": [
+          5.762607655677736,
+          1.1017510245627113,
+          0.37098180920182633
+        ],
+        "target_to_gt_model_origin_xy_m": 0.6540341188408534,
+        "target_to_gt_model_origin_3d_m": 0.7470398216845976,
+        "goal_to_estimated_target_xy_m": 1.22439909767722,
+        "final_robot_to_goal_gt_xy_m": 1.3811336707771393,
+        "goal_world_xyz": [
+          6.828533032683448,
+          0.49929252719710715,
+          0.06420076702955285
+        ]
+      },
+      "stop_observation": null,
+      "remaining_owned_pids": []
+    },
+    {
+      "attempt": 6,
+      "output_directory": "chair_kitchen_facing_robot_side",
+      "case_id": "chair_kitchen_facing",
+      "passed": false,
+      "reason": "navigation_failed",
+      "termination": "query_sim_timeout",
+      "query_timing": {
+        "observed_sim_sec": 90.0,
+        "observed_wall_sec": 201.47483581399865
+      },
+      "natural_nav2_succeeded": false,
+      "metrics": {
+        "safe_approach_surface_distance": "not_evaluated",
+        "valid_goal_rate": "not_evaluated",
+        "collision_rate": "not_evaluated",
+        "navigation_success_rate": "not_evaluated",
+        "spl": "not_evaluated",
+        "nearest_gt_id": "chaira_01_002",
+        "target_world_xyz": [
+          6.34700792524655,
+          0.23336690404375648,
+          0.23409216704671626
+        ],
+        "target_to_gt_model_origin_xy_m": 0.09299247545238627,
+        "target_to_gt_model_origin_3d_m": 0.2414133086171138,
+        "goal_to_estimated_target_xy_m": 0.8586979429606283,
+        "final_robot_to_goal_gt_xy_m": 0.3252090115747403,
+        "goal_world_xyz": [
+          5.837776344187162,
+          0.9247751438677916,
+          0.2572895917231371
+        ]
+      },
+      "stop_observation": null,
+      "remaining_owned_pids": []
+    },
+    {
+      "attempt": 7,
+      "output_directory": "chair_kitchen_facing_clearance",
+      "case_id": "chair_kitchen_facing",
+      "passed": false,
+      "reason": "navigation_failed",
+      "termination": "query_sim_timeout",
+      "query_timing": {
+        "observed_sim_sec": 90.015,
+        "observed_wall_sec": 203.08004051600074
+      },
+      "natural_nav2_succeeded": false,
+      "metrics": {
+        "safe_approach_surface_distance": "not_evaluated",
+        "valid_goal_rate": "not_evaluated",
+        "collision_rate": "not_evaluated",
+        "navigation_success_rate": "not_evaluated",
+        "spl": "not_evaluated",
+        "nearest_gt_id": "chaira_01_001",
+        "target_world_xyz": [
+          6.882261299937058,
+          0.24155131258835194,
+          0.5975770890558438
+        ],
+        "target_to_gt_model_origin_xy_m": 0.23515860680129916,
+        "target_to_gt_model_origin_3d_m": 0.6192777374131069,
+        "goal_to_estimated_target_xy_m": 1.451403418602617,
+        "final_robot_to_goal_gt_xy_m": 0.39715998509199407,
+        "goal_world_xyz": [
+          5.889438973991352,
+          1.3002654915030962,
+          0.26625538921663244
+        ]
+      },
+      "stop_observation": null,
+      "remaining_owned_pids": []
+    },
+    {
+      "attempt": 8,
+      "output_directory": "chair_kitchen_facing_outside_dining",
+      "case_id": "chair_kitchen_facing",
+      "passed": false,
+      "reason": "navigation_failed",
+      "termination": "query_sim_timeout",
+      "query_timing": {
+        "observed_sim_sec": 90.0,
+        "observed_wall_sec": 202.9990831670002
+      },
+      "natural_nav2_succeeded": false,
+      "metrics": {
+        "safe_approach_surface_distance": "not_evaluated",
+        "valid_goal_rate": "not_evaluated",
+        "collision_rate": "not_evaluated",
+        "navigation_success_rate": "not_evaluated",
+        "spl": "not_evaluated",
+        "nearest_gt_id": "chaira_01_002",
+        "target_world_xyz": [
+          6.270615865940282,
+          0.2963774950728668,
+          0.2942975410282993
+        ],
+        "target_to_gt_model_origin_xy_m": 0.07846690638425446,
+        "target_to_gt_model_origin_3d_m": 0.29366670858121263,
+        "goal_to_estimated_target_xy_m": 2.131642440776894,
+        "final_robot_to_goal_gt_xy_m": 2.469160483805263,
+        "goal_world_xyz": [
+          4.418556280765945,
+          -0.7589777950001659,
+          0.05829854343195909
+        ]
+      },
+      "stop_observation": null,
+      "remaining_owned_pids": []
+    },
+    {
+      "attempt": 9,
+      "output_directory": "chair_kitchen_wide",
+      "case_id": "chair_kitchen_wide",
+      "passed": false,
+      "reason": "navigation_failed",
+      "termination": "query_sim_timeout",
+      "query_timing": {
+        "observed_sim_sec": 90.0,
+        "observed_wall_sec": 199.63437405899822
+      },
+      "natural_nav2_succeeded": false,
+      "metrics": {
+        "safe_approach_surface_distance": "not_evaluated",
+        "valid_goal_rate": "not_evaluated",
+        "collision_rate": "not_evaluated",
+        "navigation_success_rate": "not_evaluated",
+        "spl": "not_evaluated",
+        "nearest_gt_id": "chaira_01_004",
+        "target_world_xyz": [
+          9.186921758637915,
+          2.249648018426802,
+          0.24304055286102827
+        ],
+        "target_to_gt_model_origin_xy_m": 2.259569294923248,
+        "target_to_gt_model_origin_3d_m": 2.272602496895341,
+        "goal_to_estimated_target_xy_m": 2.014107180677023,
+        "final_robot_to_goal_gt_xy_m": 2.0913387224205437,
+        "goal_world_xyz": [
+          7.586605340545418,
+          1.0266945862641752,
+          -0.023439080647137178
+        ]
+      },
+      "stop_observation": null,
+      "remaining_owned_pids": []
+    },
+    {
+      "attempt": 10,
+      "output_directory": "chair_kitchen_mapping_pitch",
+      "case_id": "chair_kitchen_mapping_pitch",
+      "passed": false,
+      "reason": "navigation_failed",
+      "termination": "query_sim_timeout",
+      "query_timing": {
+        "observed_sim_sec": 90.0,
+        "observed_wall_sec": 216.26430699299817
+      },
+      "natural_nav2_succeeded": false,
+      "metrics": {
+        "safe_approach_surface_distance": "not_evaluated",
+        "valid_goal_rate": "not_evaluated",
+        "collision_rate": "not_evaluated",
+        "navigation_success_rate": "not_evaluated",
+        "spl": "not_evaluated",
+        "nearest_gt_id": "chaira_01_002",
+        "target_world_xyz": [
+          5.898039791580898,
+          0.7908531850027978,
+          0.36690889831624757
+        ],
+        "target_to_gt_model_origin_xy_m": 0.6737540047081727,
+        "target_to_gt_model_origin_3d_m": 0.7618375533823616,
+        "goal_to_estimated_target_xy_m": 1.8797587166517198,
+        "final_robot_to_goal_gt_xy_m": 0.47132314027350924,
+        "goal_world_xyz": [
+          4.122099583323914,
+          0.1747937645535531,
+          0.03364290549989929
+        ]
+      },
+      "stop_observation": null,
+      "remaining_owned_pids": []
+    },
+    {
+      "attempt": 11,
+      "output_directory": "chair_kitchen_mapping_gait65",
+      "case_id": "chair_kitchen_mapping_pitch",
+      "passed": false,
+      "reason": "navigation_failed",
+      "termination": "nav_terminal",
+      "query_timing": {
+        "observed_sim_sec": 59.785,
+        "observed_wall_sec": 141.17726138800208,
+        "terminal_sim_sec": 54.815,
+        "terminal_wall_sec": 130.23822109799949
+      },
+      "natural_nav2_succeeded": true,
+      "metrics": {
+        "safe_approach_surface_distance": "not_evaluated",
+        "valid_goal_rate": "not_evaluated",
+        "collision_rate": "not_evaluated",
+        "navigation_success_rate": "not_evaluated",
+        "spl": "not_evaluated",
+        "nearest_gt_id": "chaira_01_002",
+        "target_world_xyz": [
+          4.202527150077742,
+          -5.3983864782550235,
+          0.7388680084084294
+        ],
+        "target_to_gt_model_origin_xy_m": 5.981068469668275,
+        "target_to_gt_model_origin_3d_m": 6.0251575584954855,
+        "goal_to_estimated_target_xy_m": 2.3495758855084294,
+        "final_robot_to_goal_gt_xy_m": 0.19255477984496966,
+        "goal_world_xyz": [
+          4.646252697835594,
+          -3.0910905544451377,
+          -0.028299483129791025
+        ]
+      },
+      "stop_observation": {
+        "start_sim_sec": 93.731,
+        "start_position": [
+          4.7184595473515705,
+          -2.905156431996475,
+          0.21466557387065985
+        ],
+        "initial_command_count": 2474,
+        "max_displacement_xy_m": 0.0089539393670387,
+        "passed": true,
+        "observed_sim_sec": 5.0,
+        "command_samples": 43,
+        "final_command": {
+          "linear_x": 0.0,
+          "linear_y": 0.0,
+          "angular_z": 0.0
+        }
+      },
+      "remaining_owned_pids": []
+    },
+    {
+      "attempt": 12,
+      "output_directory": "chair_kitchen_mapping_ground14",
+      "case_id": "chair_kitchen_mapping_pitch",
+      "passed": true,
+      "reason": "navigation_chain_smoke_pass",
+      "termination": "nav_terminal",
+      "query_timing": {
+        "observed_sim_sec": 12.740000000000002,
+        "observed_wall_sec": 28.198952824001026,
+        "terminal_sim_sec": 7.924999999999997,
+        "terminal_wall_sec": 17.525330305001262
+      },
+      "natural_nav2_succeeded": true,
+      "metrics": {
+        "safe_approach_surface_distance": "not_evaluated",
+        "valid_goal_rate": "not_evaluated",
+        "collision_rate": "not_evaluated",
+        "navigation_success_rate": "not_evaluated",
+        "spl": "not_evaluated",
+        "nearest_gt_id": "chaira_01_002",
+        "target_world_xyz": [
+          6.321406111165065,
+          0.2362557707764621,
+          0.32450260487245686
+        ],
+        "target_to_gt_model_origin_xy_m": 0.0684370931174768,
+        "target_to_gt_model_origin_3d_m": 0.3205846163426819,
+        "goal_to_estimated_target_xy_m": 1.4008467561706506,
+        "final_robot_to_goal_gt_xy_m": 0.25407540742683576,
+        "goal_world_xyz": [
+          5.5408544929694745,
+          1.3994886819365955,
+          0.03556086791417429
+        ]
+      },
+      "stop_observation": {
+        "start_sim_sec": 46.41,
+        "start_position": [
+          5.352584642589511,
+          1.5907596801890456,
+          0.20910046642417213
+        ],
+        "initial_command_count": 350,
+        "max_displacement_xy_m": 0.01642532353139486,
+        "passed": true,
+        "observed_sim_sec": 5.0,
+        "command_samples": 44,
+        "final_command": {
+          "linear_x": 0.0,
+          "linear_y": 0.0,
+          "angular_z": 0.0
+        }
+      },
+      "remaining_owned_pids": []
+    }
+  ]
+}

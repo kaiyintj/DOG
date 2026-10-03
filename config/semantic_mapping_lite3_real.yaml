@@ -96,7 +96,9 @@ ga_bsvm_node:
     evidence_strength: 1.0
     evidence_decay: 0.995
     evidence_decay_reference_sec: 0.1
+    # Bounded point support, multiplied by mean observation quality.
     max_frame_evidence: 3.0
+    source_history_size: 32
     max_total_evidence: 200.0
     # 0 derives a finite feature/color EMA cap from max_total_evidence.
     max_observation_weight: 0.0

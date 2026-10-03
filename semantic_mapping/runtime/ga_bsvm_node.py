@@ -3,6 +3,7 @@ import importlib
 import time
 
 import rclpy
+from rclpy.clock import JumpThreshold
 from rclpy.duration import Duration
 from rclpy.executors import ExternalShutdownException
 from rclpy.node import Node
@@ -249,6 +250,7 @@ class GABsvmNode(Node):
         self.declare_parameter('evidence_decay', 0.995)
         self.declare_parameter('evidence_decay_reference_sec', 0.1)
         self.declare_parameter('max_frame_evidence', 3.0)
+        self.declare_parameter('source_history_size', 32)
         self.declare_parameter('max_total_evidence', 200.0)
         # <= 0 derives the auxiliary EMA cap from max_total_evidence.
         self.declare_parameter('max_observation_weight', 0.0)
@@ -273,6 +275,8 @@ class GABsvmNode(Node):
         self.declare_parameter('query_approach_distance_m', 1.0)
         self.declare_parameter('query_approach_min_distance_m', 0.6)
         self.declare_parameter('query_approach_min_confidence', 0.15)
+        self.declare_parameter('query_approach_robot_height_m', 0.0)
+        self.declare_parameter('query_approach_ground_tolerance_m', 0.1)
         self.declare_parameter('query_require_safe_approach', True)
         self.declare_parameter('query_prefer_robot_side', True)
         self.declare_parameter('query_require_robot_side', False)
@@ -415,6 +419,7 @@ class GABsvmNode(Node):
         self.evidence_decay_reference_sec = float(
             self.get_parameter('evidence_decay_reference_sec').value)
         self.max_frame_evidence = float(self.get_parameter('max_frame_evidence').value)
+        self.source_history_size = int(self.get_parameter('source_history_size').value)
         self.max_total_evidence = float(self.get_parameter('max_total_evidence').value)
         configured_observation_weight = float(
             self.get_parameter('max_observation_weight').value)
@@ -474,6 +479,10 @@ class GABsvmNode(Node):
             0.0,
             1.0,
         ))
+        self.query_approach_robot_height_m = float(
+            self.get_parameter('query_approach_robot_height_m').value)
+        self.query_approach_ground_tolerance_m = float(
+            self.get_parameter('query_approach_ground_tolerance_m').value)
         self.query_require_safe_approach = bool(
             self.get_parameter('query_require_safe_approach').value)
         self.query_prefer_robot_side = bool(
@@ -730,6 +739,7 @@ class GABsvmNode(Node):
             evidence_decay=self.evidence_decay,
             evidence_decay_reference_sec=self.evidence_decay_reference_sec,
             max_frame_evidence=self.max_frame_evidence,
+            source_history_size=self.source_history_size,
             max_total_evidence=self.max_total_evidence,
             max_observation_weight=self.max_observation_weight,
             uncertainty_entropy_weight=self.uncertainty_entropy_weight,
@@ -803,6 +813,7 @@ class GABsvmNode(Node):
         )
         self.consecutive_tf_drops = 0
         self.frame_count = 0
+        self.fused_frame_count = 0
 
         self.current_goal_key = None  # 用于记住目标的网格位置
         self.costmap_tf_warned = False
@@ -816,7 +827,16 @@ class GABsvmNode(Node):
         self.received_query_feature = None
         self._last_query_retry_map_revision = None
         self._last_query_retry_time_sec = None
+        self.latest_observation_ns = None
         self.latest_fused_observation_ns = None
+        self._clock_jump_handle = self.get_clock().create_jump_callback(
+            JumpThreshold(
+                min_forward=None,
+                min_backward=Duration(nanoseconds=-1),
+                on_clock_change=False,
+            ),
+            post_callback=self._on_clock_jump,
+        )
         self.get_logger().info(
             'GA-BSVM 中枢已启动: '
             f'backend={self.semantic_backend}, '
@@ -844,6 +864,27 @@ class GABsvmNode(Node):
             self.get_logger().warn(
                 'LiDAR-相机投影标定尚未标记为已验证；允许生成调试语义图，'
                 '但不会发布 /query_target_pose 或 /goal_pose。')
+
+    def _on_clock_jump(self, time_jump):
+        """Reset observation state only after the ROS clock actually rewinds."""
+        # A full old-epoch queue would evict every lower-stamped new message.
+        with self.ts.lock:
+            for queue in self.ts.queues:
+                queue.clear()
+        self.imu_buffer.clear()
+        self.voxel_map.reset_clock(self.get_clock().now().nanoseconds / 1e9)
+        self.pending_tf_frames.clear()
+        self.tf_buffer.clear()
+        self.latest_observation_ns = None
+        self.latest_fused_observation_ns = None
+        self._last_query_retry_map_revision = None
+        self._last_query_retry_time_sec = None
+        self.fused_frame_count = 0
+
+    def destroy_node(self):
+        """Release the clock callback before destroying ROS subscriptions."""
+        self._clock_jump_handle.unregister()
+        return super().destroy_node()
 
     def semantic_capability_callback(self, message):
         """Accept one checkpoint contract for this map's entire lifetime."""
@@ -1185,8 +1226,14 @@ class GABsvmNode(Node):
             'low_weight_rejected': 0,
             'non_traversable_rejected': 0,
             'low_confidence_rejected': 0,
+            'ground_height_rejected': 0,
         }
         traversable_voxels = []
+        robot_position = self.get_robot_position()
+        robot_height = getattr(self, 'query_approach_robot_height_m', 0.0)
+        ground_height = (
+            float(robot_position[2]) - robot_height
+            if robot_height > 0.0 and robot_position is not None else None)
         centers = tuple(np.asarray(pos)[:2] for pos in object_positions)
         traversable_class_ids = getattr(self, 'traversable_class_ids', ())
         for key, voxel in self.voxel_map.voxels.items():
@@ -1205,6 +1252,13 @@ class GABsvmNode(Node):
             if class_index not in traversable_class_ids:
                 diagnostics['non_traversable_rejected'] += 1
                 continue
+            # The flat indoor profile queries after restoring a level body.
+            # Floor-labelled furniture points must not become approach goals.
+            if ground_height is not None and abs(
+                float(voxel['pos'][2]) - ground_height
+            ) > self.query_approach_ground_tolerance_m:
+                diagnostics['ground_height_rejected'] += 1
+                continue
             confidence = self.voxel_map.get_confidence(key)
             if confidence < self.query_approach_min_confidence:
                 diagnostics['low_confidence_rejected'] += 1
@@ -1214,7 +1268,6 @@ class GABsvmNode(Node):
                 position=voxel['pos'],
                 confidence=float(confidence),
             ))
-        robot_position = self.get_robot_position()
         return QueryApproachSnapshot(
             voxels=tuple(traversable_voxels),
             robot_position=robot_position,
@@ -1804,7 +1857,7 @@ class GABsvmNode(Node):
                 return logits, features, colors
 
             self._process_semantic_frame(
-                pc_msg, height, width, semantic_lookup)
+                pc_msg, height, width, semantic_lookup, source_image_msg.header)
         except Exception as exc:
             self.get_logger().error(f'CLIP 投影融合出错: {exc}')
 
@@ -1869,7 +1922,7 @@ class GABsvmNode(Node):
                 return logits, None, colors
 
             self._process_semantic_frame(
-                pc_msg, height, width, semantic_lookup)
+                pc_msg, height, width, semantic_lookup, source_image_msg.header)
         except Exception as exc:
             self.get_logger().error(
                 f'SegFormer full-posterior fusion failed: {exc}')
@@ -1937,7 +1990,7 @@ class GABsvmNode(Node):
                 return logits, None, colors
 
             self._process_semantic_frame(
-                pc_msg, height, width, semantic_lookup)
+                pc_msg, height, width, semantic_lookup, source_image_msg.header)
         except Exception as exc:
             self.get_logger().error(f'SegFormer 投影融合出错: {exc}')
 
@@ -1947,8 +2000,15 @@ class GABsvmNode(Node):
         height,
         width,
         semantic_lookup,
+        source_header,
     ):
         """Project one synchronized frame and fuse it once historical TF exists."""
+        source_ns = (
+            int(source_header.stamp.sec) * 1_000_000_000
+            + int(source_header.stamp.nanosec))
+        if source_ns <= 0:
+            self.get_logger().warn('丢弃无源图像时间戳的语义帧。')
+            return False
         if self.require_camera_info and not self.camera_info_received:
             if not self.camera_info_wait_warned:
                 self.get_logger().warn(
@@ -2033,8 +2093,8 @@ class GABsvmNode(Node):
             'features': per_point_feats,
             'colors': per_point_colors,
             'stamp_msg': pc_msg.header.stamp,
+            'source_id': (normalize_frame_id(source_header.frame_id), source_ns),
             'total_points': total_points,
-            'processed_count': self.frame_count // self.frame_stride,
             'motion_reliability': motion_reliability,
             'angular_rms': angular_rms,
             'acceleration_deviation': acceleration_deviation,
@@ -2197,33 +2257,35 @@ class GABsvmNode(Node):
             self.get_logger().warn(
                 '丢弃无观测时刻的语义帧，拒绝使用处理时刻替代。')
             return False
-        latest_ns = getattr(self, 'latest_fused_observation_ns', None)
+        latest_ns = getattr(self, 'latest_observation_ns', None)
         if latest_ns is not None and observation_ns < latest_ns:
-            now_ns = self.get_clock().now().nanoseconds
-            if now_ns >= latest_ns:
-                self.get_logger().warn(
-                    '丢弃迟到的旧语义帧，避免连续时间证据回退: '
-                    f'observation={observation_ns / 1e9:.6f}s, '
-                    f'latest={latest_ns / 1e9:.6f}s')
-                return False
-            # Simulation /clock restarted. Rebase the ordering guard and let
-            # VoxelMap re-anchor its per-voxel continuous-time clocks.
-        self.latest_fused_observation_ns = observation_ns
-        self.voxel_map.update(
+            self.get_logger().warn(
+                '丢弃迟到的旧语义帧，避免连续时间证据回退: '
+                f'observation={observation_ns / 1e9:.6f}s, '
+                f'latest={latest_ns / 1e9:.6f}s')
+            return False
+        # Keep ordering protection even when every voxel rejects a copied image.
+        self.latest_observation_ns = observation_ns
+        new_count, updated_count = self.voxel_map.update(
             points=valid_points,
             reliability=frame_data['reliability'],
             logits=frame_data['logits'],
             features=frame_data['features'],
             colors=frame_data['colors'],
             timestamp_sec=observation_ns / 1e9,
+            source_id=frame_data['source_id'],
         )
+        if not (new_count or updated_count):
+            return False
+        self.latest_fused_observation_ns = observation_ns
+        self.fused_frame_count += 1
         self.retry_pending_query()
 
-        processed_count = frame_data['processed_count']
-        if processed_count % self.entropy_publish_every_n_processed == 0:
+        # Dropped TF frames must not consume the publication cadence.
+        if self.fused_frame_count % self.entropy_publish_every_n_processed == 0:
             self.publish_entropy_data()
 
-        if processed_count % self.cloud_publish_stride == 0:
+        if self.fused_frame_count % self.cloud_publish_stride == 0:
             sem_pts, unc_pts = self.voxel_map.get_visualization_clouds()
             if len(sem_pts) > 0:
                 uncertainty_values = np.asarray(

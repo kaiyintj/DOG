@@ -2,6 +2,7 @@
 """Time-aware Dirichlet semantic voxel map."""
 
 import time
+from bisect import bisect_left
 
 import numpy as np
 
@@ -15,9 +16,10 @@ class VoxelMap:
     Semantic evidence follows a continuous-time exponential decay model.
     ``evidence_decay`` remains backward compatible: it is the retained fraction
     over one ``evidence_decay_reference_sec`` interval.  Explicit observation
-    timestamps make both decay and evidence injection independent of sensor
-    frame rate.  Callers that omit timestamps retain the historical one-step
-    update behavior.
+    timestamps age history by elapsed time. Evidence injection normalizes only
+    intervals up to one reference period; a visibility gap never supplies more
+    than the current observation's budget. Callers that omit timestamps retain
+    the historical one-step decay behavior.
 
     Each voxel stores a Dirichlet distribution instead of independent binary
     log-odds. Observations from one sensor frame are aggregated before they are
@@ -37,6 +39,7 @@ class VoxelMap:
         max_observation_weight=None,
         uncertainty_entropy_weight=0.7,
         class_colors=None,
+        source_history_size=32,
     ):
         self.voxel_size = float(voxel_size)
         self.K = int(K)
@@ -55,6 +58,9 @@ class VoxelMap:
             raise ValueError(
                 'evidence_decay_reference_sec must be finite and positive')
         self.max_frame_evidence = float(max_frame_evidence)
+        self.source_history_size = int(source_history_size)
+        if self.source_history_size <= 0:
+            raise ValueError('source_history_size must be positive')
         self.max_total_evidence = max(
             float(max_total_evidence), self.K * self.evidence_prior + 1.0)
         if max_observation_weight is None:
@@ -190,15 +196,16 @@ class VoxelMap:
         """
         Convert a sampled observation into reference-period evidence.
 
-        The scale is the exact zero-order-hold integral of the exponential
-        recurrence.  At the reference interval it is one, preserving the old
-        meaning of ``evidence_strength`` and ``max_frame_evidence``.  Splitting
-        the same elapsed interval into more sensor frames produces the same
-        accumulated evidence.
+        Short continuous intervals use the exact exponential recurrence.
+        At or beyond the reference interval the scale is one: missing views
+        cannot be extrapolated into observed support. Frame-rate equivalence
+        applies only to continuous intervals within that reference period.
         """
         elapsed_sec = max(float(elapsed_sec), 0.0)
         if elapsed_sec <= 0.0:
             return 0.0
+        if elapsed_sec >= self.evidence_decay_reference_sec:
+            return 1.0
         reference_steps = elapsed_sec / self.evidence_decay_reference_sec
         if self.evidence_decay >= 1.0:
             return reference_steps
@@ -206,6 +213,22 @@ class VoxelMap:
             return 1.0
         exponent = np.log(self.evidence_decay) * reference_steps
         return float(-np.expm1(exponent) / (1.0 - self.evidence_decay))
+
+    def reset_clock(self, timestamp_sec):
+        """
+        Re-anchor an explicitly confirmed clock restart, retaining the map.
+
+        The ROS adapter distinguishes a restarted /clock from a delayed frame.
+        Source-image stamps from the old clock must not reject new images with
+        reused timestamps. Ordinary pruning never clears source admission.
+        """
+        timestamp_sec = self._resolve_timestamp(timestamp_sec)
+        for voxel in self.voxels.values():
+            voxel['last_observed_at_sec'] = timestamp_sec
+            voxel['last_decay_at_sec'] = timestamp_sec
+            voxel.pop('source_history', None)
+        if self.voxels:
+            self.revision += 1
 
     @staticmethod
     def _stored_timestamp(voxel, field):
@@ -295,6 +318,7 @@ class VoxelMap:
         features=None,
         colors=None,
         timestamp_sec=None,
+        source_id=None,
     ):
         """
         Fuse one frame of point-wise semantic observations.
@@ -303,9 +327,18 @@ class VoxelMap:
         and ``logits`` is either point-wise ``(N, K)`` or one shared ``(K,)``
         vector.  ``features`` may likewise be point-wise or shared, while
         ``colors`` must have shape ``(N, 3)``.  When ``timestamp_sec`` is a
-        finite caller-clock timestamp, fusion is continuous-time and invariant
-        to how the interval is split into frames.  Omitting it applies one
-        legacy reference-period update.
+        finite caller-clock timestamp, history ages continuously, while new
+        support covers at most one reference period. Omitting it applies one
+        legacy reference-period update. ``source_id`` is an optional pair of
+        (camera identity, integer image timestamp in nanoseconds). Each voxel
+        accepts each source once within a bounded recent history; new coverage
+        remains valid. Older sources beyond the retained window are rejected.
+        The source clock sets short-interval normalization, independently of
+        the point-cloud timestamp used for aging. Timestamp-free callers with
+        no source identity treat every call as a new observation.
+        Source-aware callers confirm clock restarts with ``reset_clock``;
+        older observations alone never rewind their history. The returned
+        counts include only new/existing voxels receiving positive contribution.
         """
         points = np.asarray(points, dtype=np.float32)
         reliability = np.asarray(reliability, dtype=np.float32).reshape(-1)
@@ -339,7 +372,7 @@ class VoxelMap:
         frame_updates = {}
         for index, point in enumerate(points):
             weight = float(np.clip(reliability[index], 0.0, 1.0))
-            if not np.isfinite(weight) or weight < 1e-3:
+            if not np.isfinite(weight):
                 continue
 
             key = self.get_voxel_indices(point)
@@ -347,6 +380,7 @@ class VoxelMap:
                 key,
                 {
                     'weight': 0.0,
+                    'point_count': 0,
                     'probability_sum': np.zeros(self.K, dtype=np.float64),
                     'feature_sum': (
                         np.zeros(feature_dim, dtype=np.float64)
@@ -360,6 +394,7 @@ class VoxelMap:
             )
             probability = probabilities[index] if point_wise_probabilities else probabilities
             update['weight'] += weight
+            update['point_count'] += 1
             update['probability_sum'] += weight * probability
             if features is not None:
                 feature = features[index] if point_wise_features else features
@@ -371,24 +406,57 @@ class VoxelMap:
         observation_time = self._resolve_timestamp(timestamp_sec)
         new_count = 0
         updated_count = 0
+        touched_count = 0
         for key, update in frame_updates.items():
             raw_weight = update['weight']
             if raw_weight <= 1e-9:
                 continue
-            frame_evidence = min(raw_weight, self.max_frame_evidence)
+            # Cap geometric support before applying quality. Dense low-quality
+            # returns cannot consume the same budget as high-quality returns.
+            mean_quality = raw_weight / update['point_count']
+            frame_evidence = (
+                min(update['point_count'], self.max_frame_evidence)
+                * mean_quality)
             mean_probability = update['probability_sum'] / raw_weight
 
             is_new_voxel = key not in self.voxels
+            source_history = None
+            source_interval_scale = 1.0
+            source_index = 0
+            if source_id is not None:
+                camera_id, source_ns = source_id
+            if source_id is not None and not is_new_voxel:
+                source_history = self.voxels[key].get(
+                    'source_history', {}).get(camera_id)
+                if source_history is not None:
+                    stamps = source_history['stamps']
+                    source_index = bisect_left(stamps, source_ns)
+                    retired_ns = source_history['retired_through_ns']
+                    if (
+                        (source_index < len(stamps) and stamps[source_index] == source_ns)
+                        or (retired_ns is not None and source_ns <= retired_ns)
+                    ):
+                        # Do not refresh TTL, auxiliary values or revision for
+                        # copied/retired sources. Pruning still ages history.
+                        continue
+                    # A unique out-of-order source is still a real observation.
+                    # Use its nearest retained source for bounded sampling
+                    # support; source reordering never resets the decay clock.
+                    neighbor_gaps = []
+                    if source_index:
+                        neighbor_gaps.append(source_ns - stamps[source_index - 1])
+                    if source_index < len(stamps):
+                        neighbor_gaps.append(stamps[source_index] - source_ns)
+                    source_interval_scale = self._evidence_interval_scale(
+                        min(neighbor_gaps) / 1e9)
             if is_new_voxel:
                 self.voxels[key] = self._new_voxel(
                     key,
                     feature_dim,
                     timestamp_sec=observation_time,
                 )
-                new_count += 1
-            else:
-                updated_count += 1
             voxel = self.voxels[key]
+            touched_count += 1
             # Backfill metadata for maps created before timestamps were added.
             voxel.setdefault('created_at_sec', observation_time)
             previous_observed_sec = self._stored_timestamp(
@@ -405,7 +473,8 @@ class VoxelMap:
                 )
             else:
                 clock_rewound = (
-                    previous_observed_sec is not None
+                    source_id is None
+                    and previous_observed_sec is not None
                     and observation_time < previous_observed_sec)
                 if not clock_rewound:
                     # Pruning can already have aged this voxel past a delayed
@@ -415,7 +484,9 @@ class VoxelMap:
                     if last_decay is not None:
                         decay_time = max(observation_time, last_decay)
                 self._decay_voxel_to(voxel, decay_time)
-                if previous_observed_sec is None or clock_rewound:
+                if source_id is not None:
+                    interval_scale = source_interval_scale
+                elif previous_observed_sec is None or clock_rewound:
                     interval_scale = 1.0
                 else:
                     interval_scale = self._evidence_interval_scale(
@@ -428,6 +499,22 @@ class VoxelMap:
             observation_decay = self._decay_factor(decay_time - observation_time)
             weight_limit = self.max_observation_weight * observation_decay
             effective_evidence = frame_evidence * interval_scale
+            if source_id is not None:
+                if source_history is None:
+                    source_history = {'stamps': [], 'retired_through_ns': None}
+                    voxel.setdefault('source_history', {})[camera_id] = source_history
+                stamps = source_history['stamps']
+                stamps.insert(source_index, source_ns)
+                if len(stamps) > self.source_history_size:
+                    source_history['retired_through_ns'] = stamps.pop(0)
+            if effective_evidence <= 0.0:
+                # A repeated timestamp cannot initialize an unweighted feature
+                # or color that disagrees with the unchanged semantic evidence.
+                continue
+            if is_new_voxel:
+                new_count += 1
+            else:
+                updated_count += 1
             voxel['alpha'] += (
                 self.evidence_strength * effective_evidence * mean_probability
             ).astype(np.float32)
@@ -498,7 +585,7 @@ class VoxelMap:
             )
             voxel['observation_count'] += 1
 
-        if new_count or updated_count:
+        if touched_count:
             self.revision += 1
         return new_count, updated_count
 
@@ -569,7 +656,11 @@ class VoxelMap:
         snapshot = list(self.voxels.items())
         for key, voxel in snapshot:
             class_index = int(np.argmax(self.get_probabilities(key)))
-            self._decay_voxel_to(voxel, now_sec)
+            # /clock can lag a just-fused sensor stamp without restarting.
+            # Explicit reset_clock handles restarts; pruning never rewinds.
+            last_decay = self._stored_timestamp(voxel, 'last_decay_at_sec')
+            decay_time = now_sec if last_decay is None else max(now_sec, last_decay)
+            self._decay_voxel_to(voxel, decay_time)
             observed_at = voxel.get('last_observed_at_sec')
             try:
                 observed_at = float(observed_at)

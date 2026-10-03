@@ -93,6 +93,7 @@ REQUIRED_RELIABILITY_PARAMETERS = (
 )
 
 OPTIONAL_RELIABILITY_PARAMETERS = {
+    'source_history_size': 32,
     'num_classes': len(DEFAULT_CLASSES),
     'uncertainty_entropy_weight': 0.7,
     'dynamic_voxel_ttl_sec': 0.0,
@@ -189,7 +190,9 @@ def load_reliability_parameters(path):
     for name, default in OPTIONAL_RELIABILITY_PARAMETERS.items():
         value = values.get(name, default)
         try:
-            result[name] = int(value) if name == 'num_classes' else float(value)
+            result[name] = (
+                int(value) if name in ('num_classes', 'source_history_size')
+                else float(value))
         except (TypeError, ValueError) as exc:
             raise ValueError(
                 f'Reliability parameter {name} must be numeric') from exc
@@ -890,6 +893,8 @@ def evaluate(args):
             metadata = _read_json(dataset / relative_metadata)
             lidar_frame = int(metadata['lidar']['frame'])
             lidar_timestamp = float(metadata['lidar']['timestamp_sec'])
+            for evaluator in voxel_evaluators.values():
+                evaluator.advance_time(lidar_timestamp)
             with np.load(dataset / metadata['lidar']['path']) as normal_data:
                 normal_xyz = np.asarray(
                     normal_data['xyz'], dtype=np.float64).copy()
@@ -1123,6 +1128,8 @@ def evaluate(args):
                         voxel_gt,
                         weights,
                         timestamp_sec=lidar_timestamp,
+                        source_id=('carla_rgb', int(round(
+                            float(rgb_record['timestamp_sec']) * 1e9))),
                     )
 
                 candidate_local = np.flatnonzero(matched_projected)
@@ -1413,6 +1420,10 @@ def evaluate(args):
         ablation_report['point_level_diagnostic'][name] = (
             _weighted_accuracy(values, correct, supported))
     if args.voxel_eval:
+        ablation_report['voxel_evaluation_time_sec'] = {
+            f'{offset:g}': voxel_evaluators[offset].evaluation_time_sec
+            for offset in offsets
+        }
         ablation_report['voxel_by_offset_ms'] = {
             f'{offset:g}': voxel_evaluators[offset].report()
             for offset in offsets

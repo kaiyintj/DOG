@@ -8,13 +8,14 @@ import time
 import xml.etree.ElementTree as ET
 
 from controller_manager_msgs.srv import ListControllers
-from geometry_msgs.msg import PoseStamped, Twist
+from geometry_msgs.msg import Pose, PoseStamped, Twist
 from lifecycle_msgs.srv import GetState
 from livox_ros_driver2.msg import CustomMsg
 from nav2_msgs.action import NavigateToPose
-from nav_msgs.msg import OccupancyGrid, Odometry
+from nav_msgs.msg import OccupancyGrid, Odometry, Path
 import numpy as np
 import rclpy
+from scipy.spatial.transform import Rotation
 from rcl_interfaces.msg import Log
 from rclpy.action import ActionClient
 from rclpy.clock import Clock, ClockType
@@ -99,6 +100,7 @@ class BenchmarkObserver(Node):
         for key, topic in (('target_poses', '/query_target_pose'), ('goal_poses', '/goal_pose')):
             self.create_subscription(PoseStamped, topic, partial(self._target, key), 10)
         self.create_subscription(String, '/nav_goal_bridge/status', self._bridge, 10)
+        self.create_subscription(Path, '/plan', self._plan, 10)
         self.create_subscription(
             Twist, '/cmd_vel', partial(self._command, 'nav_cmd'), 10)
         self.create_subscription(
@@ -109,6 +111,8 @@ class BenchmarkObserver(Node):
             String, '/perception_mode', self._perception_mode, 10)
         self.create_subscription(Log, '/rosout', self._log, 100)
         self.query_publisher = self.create_publisher(String, '/text_query', 10)
+        if case.get('mapping_pitch_rad'):
+            self.body_pose_publisher = self.create_publisher(Pose, '/body_pose', 10)
         self.navigation = ActionClient(self, NavigateToPose, '/navigate_to_pose')
         self.service_clients = {
             name: self.create_client(GetState, f'/{name}/get_state') for name in (
@@ -269,6 +273,21 @@ class BenchmarkObserver(Node):
         stats['max'] = max(stats['max'], value)
         stats['last'] = value
 
+    def _plan(self, message):
+        if not message.poses or not self.recording['goal_poses']:
+            return
+        points = [[p.pose.position.x, p.pose.position.y] for p in message.poses]
+        goal = self.recording['goal_poses'][-1]
+        plan = self.recording.setdefault('plan', {'count': 0})
+        plan['count'] += 1
+        plan['last'] = {
+            'stamp': _stamp(message), 'frame': message.header.frame_id.lstrip('/'),
+            'endpoint_xy': points[-1],
+            'length_xy_m': sum(math.dist(a, b) for a, b in zip(points, points[1:])),
+        }
+        if plan['last']['frame'] == goal['frame']:
+            plan['last']['endpoint_to_goal_xy_m'] = math.dist(points[-1], goal['position'][:2])
+
     def _perception_mode(self, message):
         value = message.data.strip()
         if not value:
@@ -377,6 +396,77 @@ class BenchmarkObserver(Node):
                 return {'truth': truth, 'estimate': estimate}
         return None
 
+    def _mapping_step(self):
+        """Execute the case's predeclared CHAMP pitch sweep before querying."""
+        pitch = self.case.get('mapping_pitch_rad', 0.0)
+        if not pitch:
+            return True
+        sim = self.recording['sim_time']
+        if 'mapping_observation' not in self.recording:
+            print('benchmark: pitching body to observe nearby floor, then restoring level',
+                  flush=True)
+        mapping = self.recording.setdefault('mapping_observation', {
+            'start_sim_sec': sim, 'commanded_pitch_rad': pitch,
+            'max_observed_pitch_rad': {}, 'completed': False,
+        })
+        elapsed = sim - mapping['start_sim_sec']
+        ramp, hold, settle = 3.0, self.case['mapping_pitch_hold_sim_sec'], 5.0
+        if elapsed < ramp:
+            commanded = pitch * elapsed / ramp
+        elif elapsed < ramp + hold:
+            commanded = pitch
+        elif elapsed < 2 * ramp + hold:
+            commanded = pitch * (2 * ramp + hold - elapsed) / ramp
+        else:
+            commanded = 0.0
+        command = Pose()
+        # CHAMP interprets position.z as an offset from nominal body height.
+        command.orientation.y = math.sin(commanded / 2)
+        command.orientation.w = math.cos(commanded / 2)
+        self.body_pose_publisher.publish(command)
+        for name in ('truth', 'estimate'):
+            if self.poses[name]:
+                orientation = self.poses[name][-1]['orientation']
+                measured = float(Rotation.from_quat(orientation).as_euler('xyz')[1])
+                maxima = mapping['max_observed_pitch_rad']
+                maxima[name] = max(maxima.get(name, 0.0), measured)
+                mapping[name + '_final_pitch_rad'] = measured
+        mapping['observed_sim_sec'] = elapsed
+        if elapsed < 2 * ramp + hold + settle:
+            return False
+        # Pose feedback verifies the supported maneuver actually occurred and
+        # returned level; it never determines the predeclared command sequence.
+        mapping['completed'] = all(
+            mapping['max_observed_pitch_rad'].get(name, 0) >= pitch * .7
+            and abs(mapping.get(name + '_final_pitch_rad', math.inf)) <= .08
+            for name in ('truth', 'estimate'))
+        return mapping['completed']
+
+    def _stop_complete(self, paired):
+        """Observe actual motion and fresh final commands after Nav2 succeeds."""
+        truth = paired['truth']
+        control = self.recording['control'].get('filtered_cmd', {})
+        stop = self.recording.setdefault('stop_observation', {
+            'start_sim_sec': truth['stamp'], 'start_position': truth['position'],
+            'initial_command_count': control.get('count', 0),
+            'max_displacement_xy_m': 0.0, 'passed': False,
+        })
+        stop['observed_sim_sec'] = truth['stamp'] - stop['start_sim_sec']
+        stop['max_displacement_xy_m'] = max(
+            stop['max_displacement_xy_m'],
+            math.dist(stop['start_position'][:2], truth['position'][:2]))
+        stop['command_samples'] = control.get('count', 0) - stop['initial_command_count']
+        stop['final_command'] = control.get('last')
+        if stop['observed_sim_sec'] < self.case['stop_observation_sim_sec']:
+            return False
+        command = stop['final_command']
+        stop['passed'] = bool(
+            stop['command_samples'] > 0 and command is not None
+            and math.hypot(command['linear_x'], command['linear_y']) <= .001
+            and abs(command['angular_z']) <= .001
+            and stop['max_displacement_xy_m'] <= .05)
+        return True
+
     def observe(self, process):
         """Wait for evidence, publish exactly one query, then observe the full case."""
         start = time.monotonic()
@@ -387,7 +477,16 @@ class BenchmarkObserver(Node):
             if process.poll() is not None:
                 self.recording['termination'] = 'simulation_exited_before_ready'
                 return
-            problem = self._live_problem() or self._stationary_problem()
+            problem = self._live_problem()
+            if not problem:
+                if ('mapping_observation' in self.recording
+                        or self._stationary_problem() is None):
+                    if not self._mapping_step():
+                        problem = 'mapping_pitch_observation'
+                    else:
+                        problem = self._stationary_problem()
+                else:
+                    problem = self._stationary_problem()
             self.recording['readiness']['last_problem'] = problem
             if not problem:
                 break
@@ -430,10 +529,15 @@ class BenchmarkObserver(Node):
             if process.poll() is not None or problem:
                 self.recording['termination'] = problem or 'simulation_exited'
                 break
-            if not negative and any(e['event'] in ('SUCCEEDED', 'ABORTED', 'CANCELED')
-                                    for e in self.recording['bridge_events']):
-                self.recording['termination'] = 'nav_terminal'
-                break
+            terminal = next((e['event'] for e in reversed(self.recording['bridge_events'])
+                             if e['event'] in ('SUCCEEDED', 'ABORTED', 'CANCELED')), None)
+            if not negative and terminal is None:
+                if query['observed_sim_sec'] >= self.case['query_timeout_sim_sec']:
+                    self.recording['termination'] = 'query_sim_timeout'
+                    break
+            elif not negative:
+                query.setdefault('terminal_sim_sec', query['observed_sim_sec'])
+                query.setdefault('terminal_wall_sec', query['observed_wall_sec'])
             paired = self._paired_pose()
             if paired is None:
                 self.recording['pose_pair_skipped'] = (
@@ -447,6 +551,11 @@ class BenchmarkObserver(Node):
             if error > .5:
                 self.recording['termination'] = 'localization_diverged_during_query'
                 break
+            if not negative:
+                if terminal is not None:
+                    if terminal != 'SUCCEEDED' or self._stop_complete(paired):
+                        self.recording['termination'] = 'nav_terminal'
+                        break
         else:
             if negative:
                 self.recording['termination'] = 'observation_complete'

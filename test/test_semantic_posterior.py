@@ -239,9 +239,10 @@ def test_semantic_callbacks_accept_same_image_with_offset_lidar(backend):
     observation.invoke()
 
     observation.node._process_semantic_frame.assert_called_once()
-    cloud, height, width, lookup = (
+    cloud, height, width, lookup, source_header = (
         observation.node._process_semantic_frame.call_args.args)
     assert cloud is observation.cloud
+    assert source_header is observation.products[-1].header
     assert (height, width) == (2, 2)
     logits, features, colors = lookup(np.array([0]), np.array([0]))
     assert logits.shape == (1, 2)
@@ -282,5 +283,77 @@ def test_hard_mask_rejects_confidence_from_another_image(mismatch):
     observation.invoke()
 
     observation.node._process_semantic_frame.assert_not_called()
+    observation.logger.warn.assert_called_once()
+    observation.logger.error.assert_not_called()
+
+
+@pytest.mark.parametrize('backend', ['hard_mask', 'full_posterior', 'clip'])
+def test_source_identity_survives_real_projection_and_delayed_tf_fusion(backend):
+    from collections import deque
+    from types import SimpleNamespace
+
+    observation = _callback_observation(backend)
+    node = observation.node
+    node._process_semantic_frame = GABsvmNode._process_semantic_frame.__get__(node)
+    node.require_camera_info = False
+    node.compute_motion_reliability = lambda stamp: (1.0, 0.0, 0.0)
+    node.pointcloud_type = 'pointcloud2'
+    points = np.asarray([[0.01, 0.01, 0.01]], dtype=np.float32)
+    node.parse_pointcloud2_msg = lambda message: points
+    node.project_points = lambda points, height, width: (
+        np.ones(1, dtype=bool), np.zeros(1, dtype=int), np.zeros(1, dtype=int))
+    node.density_scale = 1.0
+    node.range_scale_m = 40.0
+    node.view_edge_penalty = 0.1
+    node.semantic_confidence_floor = 0.1
+    node.pointcloud_frame = 'lidar'
+    node.base_frame = 'base_link'
+    node.odom_frame = 'odom'
+    node.get_clock = lambda: SimpleNamespace(now=lambda: SimpleNamespace(
+        nanoseconds=1_100_000_000))
+    node.pending_tf_frames = deque()
+    node.tf_retry_queue_size = 8
+    node.tf_retry_max_age_sec = 3.0
+    node.consecutive_tf_drops = node.tf_queue_drop_count = 0
+    node.voxel_map = VoxelMap(K=2, evidence_decay=1.0)
+    node.entropy_publish_every_n_processed = node.cloud_publish_stride = 100
+    node.fused_frame_count = 0
+    node.retry_pending_query = lambda: None
+    node.latest_fused_observation_ns = None
+
+    def unavailable(*args):
+        raise LookupError('historical TF is not ready yet')
+
+    node._transform_semantic_points = unavailable
+    observation.invoke()
+
+    assert len(node.pending_tf_frames) == 1
+    assert node.pending_tf_frames[0]['frame_data']['source_id'] == ('camera', 1_000_000_000)
+    node._transform_semantic_points = lambda points, *args: points
+    node.retry_pending_tf_frames()
+    voxel = node.voxel_map.voxels[(0, 0, 0)]
+    assert voxel['last_observed_at_sec'] == 1.04
+    assert voxel['observation_count'] == 1
+    evidence = voxel['alpha'].copy()
+
+    # A new cloud paired with the same image must reach the map but add no evidence.
+    observation.cloud.header.stamp.nanosec = 80_000_000
+    observation.invoke()
+    np.testing.assert_array_equal(voxel['alpha'], evidence)
+    assert voxel['observation_count'] == 1
+    assert node.pending_tf_frames == deque()
+    observation.logger.error.assert_not_called()
+
+
+@pytest.mark.parametrize('backend', ['hard_mask', 'full_posterior', 'clip'])
+def test_semantic_callback_rejects_missing_source_image_timestamp(backend):
+    observation = _callback_observation(backend)
+    observation.node._process_semantic_frame = (
+        GABsvmNode._process_semantic_frame.__get__(observation.node))
+    for product in observation.products:
+        product.header.stamp.sec = 0
+
+    observation.invoke()
+
     observation.logger.warn.assert_called_once()
     observation.logger.error.assert_not_called()

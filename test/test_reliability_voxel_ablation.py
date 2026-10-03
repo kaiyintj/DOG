@@ -90,3 +90,50 @@ def test_negative_ground_truth_ids_do_not_create_reference_voxels():
 
     assert ablation.report()['full']['gt_voxel_count'] == 0
     assert ablation.report()['full']['coverage'] is None
+
+
+def test_report_ages_unseen_voxels_to_dataset_endpoint_without_changing_coverage():
+    ablation = VoxelAblation(
+        {'num_classes': 2, 'voxel_size': 1.0, 'evidence_decay': .5,
+         'evidence_decay_reference_sec': 10.0},
+        class_colors=np.zeros((2, 3), dtype=np.uint8))
+    weights = {name: np.ones(1) for name in ABLATION_NAMES}
+    for x, stamp in ((.1, 1.0), (1.1, 11.0)):
+        ablation.update([[x, .1, .1]], [[8.0, 0.0]], [0], weights,
+                        timestamp_sec=stamp, source_id=('camera', round(stamp * 1e9)))
+    before = {name: {key: voxel['alpha'].copy() - 1.0
+                     for key, voxel in voxel_map.voxels.items()}
+              for name, voxel_map in ablation.maps.items()}
+    # The final LiDAR frame has no matching RGB and supplies no new evidence.
+    ablation.advance_time(21.0)
+    report = ablation.report()
+    for name, voxel_map in ablation.maps.items():
+        for key, retention in (((0, 0, 0), .25), ((1, 0, 0), .5)):
+            voxel = voxel_map.voxels[key]
+            assert voxel['last_decay_at_sec'] == 21.0
+            assert voxel['observation_count'] == 1
+            np.testing.assert_allclose(voxel['alpha'] - 1.0,
+                                       before[name][key] * retention, atol=1e-7)
+        assert report[name]['gt_voxel_count'] == report[name]['covered_voxel_count'] == 2
+    assert ablation.report() == report
+
+
+def test_all_ablation_maps_share_source_identity_and_keep_new_coverage():
+    ablation = VoxelAblation(
+        {'num_classes': 2, 'voxel_size': 1.0, 'evidence_decay': 1.0,
+         'source_history_size': 2},
+        class_colors=np.zeros((2, 3), dtype=np.uint8))
+    points = np.array([[0.1, 0.1, 0.1], [1.1, 0.1, 0.1]], dtype=np.float32)
+    logits = np.array([[8.0, 0.0], [0.0, 8.0]], dtype=np.float32)
+    weights = {name: np.ones(2) for name in ABLATION_NAMES}
+    source = ('carla_rgb', 1_000_000_000)
+    first_weights = {name: value[:1] for name, value in weights.items()}
+    ablation.update(points[:1], logits[:1], [0], first_weights,
+                    timestamp_sec=1.0, source_id=source)
+    results = ablation.update(points, logits, [0, 1], weights,
+                              timestamp_sec=1.1, source_id=source)
+    for name, voxel_map in ablation.maps.items():
+        assert results[name] == (1, 0)
+        assert voxel_map.source_history_size == 2
+        assert voxel_map.voxels[(0, 0, 0)]['observation_count'] == 1
+        assert voxel_map.voxels[(1, 0, 0)]['observation_count'] == 1

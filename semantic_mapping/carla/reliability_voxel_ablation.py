@@ -115,6 +115,7 @@ def voxel_map_kwargs_from_params(
         'evidence_decay_reference_sec': float(
             params.get('evidence_decay_reference_sec', 0.1)),
         'max_frame_evidence': float(params.get('max_frame_evidence', 3.0)),
+        'source_history_size': int(params.get('source_history_size', 32)),
         'max_total_evidence': float(params.get('max_total_evidence', 200.0)),
         'max_observation_weight': (
             configured_observation_weight
@@ -233,11 +234,21 @@ class VoxelAblation:
         }
         self._ground_truth_counts = defaultdict(
             lambda: np.zeros(self.class_count, dtype=np.int64))
+        self.evaluation_time_sec = None
 
     @property
     def voxel_size(self):
         """Return the common voxel size used by all ablation maps."""
         return self.map_kwargs['voxel_size']
+
+    def advance_time(self, timestamp_sec):
+        """Track dataset time, including LiDAR frames without usable RGB."""
+        timestamp_sec = float(timestamp_sec)
+        if not np.isfinite(timestamp_sec):
+            raise ValueError('timestamp_sec must be finite')
+        self.evaluation_time_sec = (
+            timestamp_sec if self.evaluation_time_sec is None
+            else max(self.evaluation_time_sec, timestamp_sec))
 
     def update(
         self,
@@ -246,6 +257,7 @@ class VoxelAblation:
         gt_ids,
         weights,
         timestamp_sec=None,
+        source_id=None,
     ):
         """
         Fuse one frame and update the supported ground-truth voxel majority.
@@ -256,6 +268,7 @@ class VoxelAblation:
             gt_ids: Integer ground-truth project labels; negative means ignore.
             weights: Mapping returned by :func:`ablation_weights`.
             timestamp_sec: Timestamp passed unchanged to each ``VoxelMap``.
+            source_id: Source RGB identity passed unchanged to each map.
 
         Returns
         -------
@@ -281,6 +294,9 @@ class VoxelAblation:
         if missing:
             raise ValueError(f'weights missing ablations: {sorted(missing)}')
 
+        if timestamp_sec is not None:
+            self.advance_time(timestamp_sec)
+
         finite_points = np.all(np.isfinite(points_world), axis=1)
         finite_logits = np.all(np.isfinite(logits), axis=1)
         usable = finite_points & finite_logits
@@ -299,6 +315,7 @@ class VoxelAblation:
                 reliability[usable],
                 logits[usable],
                 timestamp_sec=timestamp_sec,
+                source_id=source_id,
             )
         return results
 
@@ -321,6 +338,10 @@ class VoxelAblation:
 
         for name in ABLATION_NAMES:
             voxel_map = self.maps[name]
+            if self.evaluation_time_sec is not None:
+                # Updates age visible voxels lazily. Bring the unseen history
+                # to the same endpoint once, without altering GT or coverage.
+                voxel_map.prune(self.evaluation_time_sec)
 
             covered = 0
             correct = 0

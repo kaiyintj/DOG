@@ -28,11 +28,10 @@ def test_indoor_preset_selects_one_profile_without_repeating_class_metadata():
     assert mapper['semantic_backend'] == 'segformer'
     assert mapper['segformer_use_full_posterior'] is True
     assert mapper['query_require_safe_approach'] is True
-    # Keep same-side selection as a preference in Gazebo.  A strict side
-    # requirement can reject every observed approach voxel when the object is
-    # seen from behind, preventing the navigation chain from starting.
+    # Far-side dining-chair goals led the body into table legs in real runs.
+    # A cluster without robot-side floor must leave selection to the next one.
     assert mapper['query_prefer_robot_side'] is True
-    assert mapper['query_require_robot_side'] is False
+    assert mapper['query_require_robot_side'] is True
     assert mapper['query_face_target'] is False
     assert 'query_require_direct_path' not in mapper
     assert mapper['query_require_robot_pose_for_approach'] is True

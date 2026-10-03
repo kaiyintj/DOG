@@ -157,8 +157,8 @@ def test_point_colors_are_fused_per_voxel():
     assert color[1] < 0.05
 
 
-def test_continuous_time_fusion_is_equivalent_across_frame_rates():
-    """Equal evidence rates over equal time must yield equal posteriors."""
+def test_continuous_observations_within_reference_period_are_rate_equivalent():
+    """Only continuously observed intervals <= reference share evidence rates."""
     common = {
         'K': 3,
         'evidence_decay': 0.9,
@@ -443,3 +443,215 @@ def test_clock_rewind_remains_distinct_from_late_pruned_frame():
     voxel_map.update(point, np.ones(1), np.array([[4., 0.]]), timestamp_sec=1.)
     assert voxel_map.voxels[(0, 0, 0)]['last_decay_at_sec'] == 1.
     assert voxel_map.voxels[(0, 0, 0)]['last_observed_at_sec'] == 1.
+
+
+@pytest.mark.parametrize('point_count', [20, 200])
+def test_saturated_support_preserves_quality_and_auxiliary_budget(point_count):
+    points = np.tile([[0.01, 0.01, 0.01]], (point_count, 1))
+    maps = []
+    for quality in (0.2, 1.0):
+        voxel_map = VoxelMap(K=2, evidence_decay=1.0, max_frame_evidence=3.0)
+        voxel_map.update(
+            points, np.full(point_count, quality), np.array([6.0, 0.0]),
+            features=np.array([1.0, 0.0]), colors=np.tile([0.0, 0.0, 1.0], (point_count, 1)),
+            timestamp_sec=10.0, source_id=('camera', 10_000_000_000))
+        maps.append(voxel_map)
+    low, high = [m.voxels[(0, 0, 0)] for m in maps]
+    assert np.sum(low['alpha'] - 1.0) < np.sum(high['alpha'] - 1.0)
+    assert low['weight_sum'] == pytest.approx(0.6)
+    assert high['weight_sum'] == pytest.approx(3.0)
+    for voxel in (low, high):
+        assert np.sum(voxel['alpha'] - 1.0) == pytest.approx(voxel['weight_sum'])
+        assert voxel['feature_weight_sum'] == pytest.approx(voxel['weight_sum'])
+        assert voxel['color_weight_sum'] == pytest.approx(voxel['weight_sum'])
+
+
+def test_near_zero_quality_returns_still_reduce_mean_quality():
+    """Discarding weak returns before the mean must not inflate its budget."""
+    points = np.tile([[0.01, 0.01, 0.01]], (20, 1))
+    evidence = []
+    for weak_quality in (0.001, 0.0009, 0.0):
+        voxel_map = VoxelMap(K=2, evidence_decay=1.0, max_frame_evidence=3.0)
+        reliability = np.full(20, weak_quality)
+        reliability[0] = 1.0
+        voxel_map.update(points, reliability, [6.0, 0.0])
+        evidence.append(voxel_map.voxels[(0, 0, 0)]['weight_sum'])
+    assert evidence[0] > evidence[1] > evidence[2]
+    assert evidence[2] < 1.0
+
+
+def test_duplicate_image_cannot_change_existing_voxel_or_refresh_its_age():
+    voxel_map = VoxelMap(K=2, evidence_decay=1.0)
+    point = np.array([[0.01, 0.01, 0.01]])
+    source = ('camera', 10_000_000_000)
+    voxel_map.update(point, [1.0], [6.0, 0.0], features=[1.0, 0.0],
+                     colors=[[1.0, 0.0, 0.0]], timestamp_sec=10.0, source_id=source)
+    before = {field: value.copy() if isinstance(value, np.ndarray) else value
+              for field, value in voxel_map.voxels[(0, 0, 0)].items()}
+    revision = voxel_map.revision
+    for timestamp in (10.1, 10.2, 10.3):
+        assert voxel_map.update(point, [1.0], [0.0, 6.0], features=[0.0, 1.0],
+                                colors=[[0.0, 0.0, 1.0]], timestamp_sec=timestamp,
+                                source_id=source) == (0, 0)
+    voxel = voxel_map.voxels[(0, 0, 0)]
+    for field in ('alpha', 'feature_512', 'color_rgb', 'weight_sum',
+                  'feature_weight_sum', 'color_weight_sum', 'observation_count',
+                  'last_observed_at_sec', 'last_decay_at_sec'):
+        np.testing.assert_array_equal(voxel[field], before[field])
+    assert voxel_map.revision == revision
+    voxel_map.prune(11.0, stale_ttl_sec=0.5)
+    assert voxel_map.voxels == {}
+
+
+def test_same_image_can_contribute_to_new_coverage_and_another_camera():
+    voxel_map = VoxelMap(K=2, evidence_decay=1.0)
+    source = ('camera', 10_000_000_000)
+    first = [[0.01, 0.01, 0.01]]
+    both = [[0.01, 0.01, 0.01], [0.21, 0.01, 0.01]]
+    voxel_map.update(first, [1.0], [6.0, 0.0], timestamp_sec=10.0, source_id=source)
+    assert voxel_map.update(both, [1.0, 1.0], [6.0, 0.0], timestamp_sec=10.1,
+                            source_id=source) == (1, 0)
+    assert voxel_map.voxels[(0, 0, 0)]['observation_count'] == 1
+    assert voxel_map.voxels[(2, 0, 0)]['observation_count'] == 1
+    assert voxel_map.update(first, [1.0], [6.0, 0.0], timestamp_sec=10.1,
+                            source_id=('other_camera', source[1])) == (0, 1)
+    assert voxel_map.voxels[(0, 0, 0)]['weight_sum'] == pytest.approx(2.0)
+    assert voxel_map.update(first, [1.0], [6.0, 0.0], timestamp_sec=10.2,
+                            source_id=source) == (0, 0)
+
+
+def test_unseen_out_of_order_image_is_admitted_without_clock_rewind():
+    voxel_map = VoxelMap(K=2, evidence_decay=1.0)
+    point = [[0.01, 0.01, 0.01]]
+    voxel_map.update(point, [1.0], [6.0, 0.0], timestamp_sec=10.0,
+                     source_id=('camera', 10_060_000_000))
+    before = voxel_map.voxels[(0, 0, 0)]['weight_sum']
+    assert voxel_map.update(point, [1.0], [0.0, 6.0], timestamp_sec=10.1,
+                            source_id=('camera', 10_000_000_000)) == (0, 1)
+    voxel = voxel_map.voxels[(0, 0, 0)]
+    assert before < voxel['weight_sum'] <= before + 1.0
+    assert voxel['last_observed_at_sec'] == 10.1
+    assert voxel['last_decay_at_sec'] == 10.1
+    assert voxel_map.update(point, [1.0], [0.0, 6.0], timestamp_sec=10.2,
+                            source_id=('camera', 10_000_000_000)) == (0, 0)
+
+
+def test_source_history_is_bounded_and_retired_sources_cannot_reenter():
+    voxel_map = VoxelMap(K=2, evidence_decay=1.0, source_history_size=2)
+    point = [[0.01, 0.01, 0.01]]
+    for stamp in (10, 12, 11, 13):
+        voxel_map.update(point, [1.0], [6.0, 0.0], timestamp_sec=20.0 + stamp,
+                         source_id=('camera', stamp * 1_000_000_000))
+    voxel = voxel_map.voxels[(0, 0, 0)]
+    history = voxel['source_history']['camera']
+    assert len(history['stamps']) == 2
+    assert voxel['observation_count'] == 4
+    for stamp in (9, 10, 11, 12, 13):
+        assert voxel_map.update(point, [1.0], [0.0, 6.0], timestamp_sec=40.0,
+                                source_id=('camera', stamp * 1_000_000_000)) == (0, 0)
+    voxel_map.prune(41.0, stale_ttl_sec=1.0)
+    assert voxel_map.voxels == {}
+    assert voxel_map.update(point, [1.0], [6.0, 0.0], timestamp_sec=42.0,
+                            source_id=('camera', 10_000_000_000)) == (1, 0)
+
+
+@pytest.mark.parametrize('gap', [0.1, 1.0, 10.0, 100.0])
+def test_reappearance_adds_only_one_observation_after_aging_history(gap):
+    voxel_map = VoxelMap(K=2, max_frame_evidence=3.0)
+    points = np.tile([[0.01, 0.01, 0.01]], (20, 1))
+    voxel_map.update(points, np.ones(20), [6.0, 0.0], features=[1.0, 0.0],
+                     colors=np.tile([1.0, 0.0, 0.0], (20, 1)), timestamp_sec=10.0,
+                     source_id=('camera', 10_000_000_000))
+    previous = voxel_map.voxels[(0, 0, 0)]['alpha'].copy() - 1.0
+    voxel_map.update(points, np.ones(20), [0.0, 6.0], features=[0.0, 1.0],
+                     colors=np.tile([0.0, 0.0, 1.0], (20, 1)), timestamp_sec=10.0 + gap,
+                     source_id=('camera', int(round((10.0 + gap) * 1e9))))
+    voxel = voxel_map.voxels[(0, 0, 0)]
+    aged = previous * (0.995 ** (gap / 0.1))
+    injected = voxel['alpha'] - 1.0 - aged
+    assert np.sum(injected) == pytest.approx(3.0, abs=2e-6)
+    assert voxel['weight_sum'] == pytest.approx(np.sum(aged) + 3.0, abs=2e-6)
+    assert voxel['feature_weight_sum'] == pytest.approx(voxel['weight_sum'])
+    assert voxel['color_weight_sum'] == pytest.approx(voxel['weight_sum'])
+
+
+@pytest.mark.parametrize('evidence_cap,new_frames', [(20.0, 10), (200.0, 100)])
+def test_capped_source_evidence_resists_noise_but_can_correct_the_class(
+    evidence_cap, new_frames,
+):
+    voxel_map = VoxelMap(K=2, max_frame_evidence=3.0, max_total_evidence=evidence_cap)
+    points = np.tile([[0.01, 0.01, 0.01]], (20, 1))
+    for frame in range(100):
+        voxel_map.update(points, np.ones(20), [6.0, 0.0], timestamp_sec=10.0 + frame * 0.1,
+                         source_id=('camera', 10_000_000_000 + frame * 100_000_000))
+    # One low-quality disagreement and copies of it cannot flip a stable voxel.
+    noisy_source = ('camera', 20_000_000_000)
+    for index in range(10):
+        voxel_map.update(points, np.full(20, 0.2), [0.0, 6.0], timestamp_sec=20.0 + index * 0.001,
+                         source_id=noisy_source)
+    assert np.argmax(voxel_map.get_probabilities((0, 0, 0))) == 0
+    for frame in range(1, new_frames + 1):
+        voxel_map.update(points, np.ones(20), [0.0, 6.0], timestamp_sec=20.0 + frame * 0.1,
+                         source_id=('camera', 20_000_000_000 + frame * 100_000_000))
+    assert np.argmax(voxel_map.get_probabilities((0, 0, 0))) == 1
+    assert voxel_map.get_evidence_probabilities((0, 0, 0))[1] > 0.7
+
+
+def test_pruning_with_lagging_clock_does_not_decay_history_twice():
+    maps = [VoxelMap(K=2, evidence_decay=.5) for _ in range(2)]
+    for voxel_map in maps:
+        for stamp in (10.0, 10.08):
+            voxel_map.update([[.01, .01, .01]], [1.0], [6.0, 0.0],
+                             features=[1.0, 0.0], colors=[[1.0, 0.0, 0.0]],
+                             timestamp_sec=stamp, source_id=('camera', round(stamp * 1e9)))
+    maps[1].prune(10.04)
+    assert maps[1].voxels[(0, 0, 0)]['last_decay_at_sec'] == 10.08
+    for voxel_map in maps:
+        voxel_map.update([[.01, .01, .01]], [1.0], [0.0, 6.0],
+                         features=[0.0, 1.0], colors=[[0.0, 0.0, 1.0]],
+                         timestamp_sec=10.16, source_id=('camera', 10_160_000_000))
+    for field in ('alpha', 'weight_sum', 'feature_weight_sum', 'color_weight_sum',
+                  'feature_512', 'color_rgb'):
+        np.testing.assert_allclose(maps[0].voxels[(0, 0, 0)][field],
+                                   maps[1].voxels[(0, 0, 0)][field])
+
+
+def test_confirmed_clock_restart_reuses_source_stamps_without_reusing_old_clocks():
+    voxel_map = VoxelMap(K=2, evidence_decay=1.0)
+    point = [[0.01, 0.01, 0.01]]
+    voxel_map.update(point, [1.0], [6.0, 0.0], timestamp_sec=1.0,
+                     source_id=('camera', 1_000_000_000))
+    voxel_map.update(point, [1.0], [6.0, 0.0], timestamp_sec=10.0,
+                     source_id=('camera', 10_000_000_000))
+    old_evidence = voxel_map.voxels[(0, 0, 0)]['alpha'].copy()
+    voxel_map.reset_clock(1.0)
+    np.testing.assert_array_equal(voxel_map.voxels[(0, 0, 0)]['alpha'], old_evidence)
+    assert voxel_map.update(point, [1.0], [0.0, 6.0], timestamp_sec=1.0,
+                            source_id=('camera', 1_000_000_000)) == (0, 1)
+    assert voxel_map.voxels[(0, 0, 0)]['weight_sum'] == pytest.approx(3.0)
+    assert voxel_map.prune(1.1, stale_ttl_sec=0.5)['total'] == 0
+
+
+@pytest.mark.parametrize('retention', [0.0, 0.5])
+def test_delayed_source_after_reset_ages_to_pruned_horizon_and_counts_only_contribution(retention):
+    voxel_map = VoxelMap(K=2, evidence_decay=retention, evidence_decay_reference_sec=1.0)
+    point = [[0.01, 0.01, 0.01]]
+    voxel_map.update(point, [1.0], [6.0, 0.0], features=[1.0, 0.0],
+                     colors=[[1.0, 0.0, 0.0]], timestamp_sec=10.0,
+                     source_id=('camera', 10_000_000_000))
+    previous = voxel_map.voxels[(0, 0, 0)]['alpha'].copy() - 1.0
+    voxel_map.reset_clock(1.1)
+    voxel_map.prune(1.2)
+
+    counts = voxel_map.update(point, [1.0], [0.0, 6.0], features=[0.0, 1.0],
+                              colors=[[0.0, 0.0, 1.0]], timestamp_sec=1.0,
+                              source_id=('camera', 1_000_000_000))
+
+    voxel = voxel_map.voxels[(0, 0, 0)]
+    assert counts == (0, int(retention > 0.0))
+    assert voxel['last_decay_at_sec'] == 1.2
+    expected = previous * retention**0.1 + retention**0.2 * VoxelMap.softmax([0.0, 6.0])
+    np.testing.assert_allclose(voxel['alpha'] - 1.0, expected, atol=2e-6)
+    assert voxel['observation_count'] == 1 + int(retention > 0.0)
+    for field in ('weight_sum', 'feature_weight_sum', 'color_weight_sum'):
+        assert voxel[field] == pytest.approx(retention**0.1 + retention**0.2)

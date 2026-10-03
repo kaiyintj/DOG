@@ -81,7 +81,10 @@ ga_bsvm_node:
     evidence_strength: 1.0
     evidence_decay: 0.995
     evidence_decay_reference_sec: 0.1
+    # Bounded point support, multiplied by mean observation quality.
     max_frame_evidence: 3.0
+    # Recent distinct source images retained per voxel and camera.
+    source_history_size: 32
     max_total_evidence: 200.0
     # 0 derives a finite feature/color EMA cap from max_total_evidence.
     max_observation_weight: 0.0
@@ -101,16 +104,20 @@ ga_bsvm_node:
     query_min_color_score: 0.2
     query_min_color_support_ratio: 0.3
     query_allow_feature_fallback: false
-    query_approach_radius_m: 1.8
-    query_approach_distance_m: 1.0
-    query_approach_min_distance_m: 0.6
+    query_approach_radius_m: 2.5
+    # Keep stand-off on robot-side ground instead of floor-labelled furniture.
+    query_approach_distance_m: 1.4
+    query_approach_min_distance_m: 1.3
     query_approach_min_confidence: 0.15
+    # Query after restoring the level Go2 body; include 0.1 m voxel quantization.
+    query_approach_robot_height_m: 0.225
+    query_approach_ground_tolerance_m: 0.1
     query_require_safe_approach: true
     query_prefer_robot_side: true
-    # Prefer a robot-side approach when one exists, but do not reject every
-    # candidate when the semantic map only observes the object from the other
-    # side. The Nav2 geometric costmaps remain the final path feasibility check.
-    query_require_robot_side: false
+    # A far-side dining-chair goal can route the body through the table legs.
+    # Try the next class cluster when the current target has no robot-side floor.
+    # Semantic support still does not prove clearance for the robot footprint.
+    query_require_robot_side: true
     # The simulated quadruped follows the approach path more reliably when
     # its final heading is tangent to that path instead of forcing a 180-degree
     # in-place turn just to face the chair. Real profiles keep target-facing.
@@ -137,7 +144,8 @@ ga_bsvm_node:
     segformer_process_every_n_frames: 1
     entropy_publish_every_n_processed: 2
     cloud_publish_every_n_processed: 10
-    segformer_cloud_publish_every_n_processed: 3
+    # Keep the observer and speed gate current when historical TF drops frames.
+    segformer_cloud_publish_every_n_processed: 1
     imu_window_sec: 0.15
     motion_angular_scale: 2.0
     motion_accel_scale: 3.0
@@ -160,7 +168,10 @@ active_perception_node:
     search_radius: 0.5
     # 0.0 derives H_max as ln(num_classes), avoiding schema drift.
     h_max: 0.0
-    min_speed_ratio: 0.3
+    # 0.3 reduced Nav2's 0.16 m/s approach command to ~0.05 m/s;
+    # actual Go2 displacement then fell to ~0.005 m/s on clear floor.
+    # Keep semantic modulation above the usable simulated gait speed.
+    min_speed_ratio: 0.65
     unknown_speed_ratio: 0.65
     linear_deadband: 0.01
     angular_deadband: 0.03

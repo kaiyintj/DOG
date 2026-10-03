@@ -74,6 +74,11 @@ def test_mapping_node_starts_with_indoor_defaults(monkeypatch, tmp_path):
         ]
         assert len(node.get_parameter('query_class_max_extent_m').value) == 8
         assert node.get_parameter('projection_calibration_verified').value is False
+        node.set_parameters([rclpy.Parameter('use_sim_time', value=True)])
+        node.get_clock().set_ros_time_override(rclpy.time.Time(seconds=10.0))
+        node.latest_observation_ns = node.latest_fused_observation_ns = 10_000_000_000
+        node.get_clock().set_ros_time_override(rclpy.time.Time(seconds=1.0))
+        assert node.latest_observation_ns is node.latest_fused_observation_ns is None
     finally:
         if node is not None:
             node.destroy_node()

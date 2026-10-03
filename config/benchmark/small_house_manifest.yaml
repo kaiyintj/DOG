@@ -82,6 +82,10 @@ robot_starts:
     # Stable view of the less-occluded southeast side of the dining chairs.
     pose: [8.0, -0.8, 2.35]
     spawn_height_m: 0.35
+  - id: kitchen_chair_view
+    # Face past the nearby table legs; retain the original kitchen start above.
+    pose: [5.0, 2.4, -1.3]
+    spawn_height_m: 0.35
 
 cases:
   - id: validate_kitchen_close
@@ -102,6 +106,34 @@ cases:
     target_class: table
     expected: navigation_success
     instance_policy: nearest_same_class_gt
+  - id: chair_dining_southeast
+    start: dining_southeast_view
+    query: chair
+    target_class: chair
+    expected: navigation_success
+    instance_policy: nearest_same_class_gt
+  - id: chair_kitchen_facing
+    start: kitchen_chair_view
+    query: chair
+    target_class: chair
+    expected: navigation_success
+    instance_policy: nearest_same_class_gt
+  - id: chair_kitchen_wide
+    start: kitchen_view
+    query: chair
+    target_class: chair
+    expected: navigation_success
+    instance_policy: nearest_same_class_gt
+  - id: chair_kitchen_mapping_pitch
+    start: kitchen_chair_view
+    query: chair
+    target_class: chair
+    expected: navigation_success
+    instance_policy: nearest_same_class_gt
+    # Real MID360 rays cannot observe nearby ground with a level stationary body.
+    # Use CHAMP's body pose control after FAST-LIO warmup, then return level.
+    mapping_pitch_rad: 0.3
+    mapping_pitch_hold_sim_sec: 10.0
   - id: floor_nonqueryable
     start: kitchen_view
     query: floor
@@ -133,5 +165,7 @@ startup_timeout_wall_sec: 180.0
 # Class-level smoke tolerance to model origins; not a surface/center accuracy claim.
 target_origin_tolerance_xy_m: 1.5
 warmup_sim_sec: 15.0
-query_timeout_wall_sec: 120.0
+query_timeout_sim_sec: 90.0
+query_timeout_wall_sec: 300.0
+stop_observation_sim_sec: 5.0
 negative_observation_wall_sec: 15.0

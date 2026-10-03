@@ -159,10 +159,12 @@ def test_delayed_tf_entropy_retains_observation_time():
     node.retry_pending_query = lambda: None
     node.entropy_publish_every_n_processed = 1
     node.cloud_publish_stride = 100
+    node.fused_frame_count = 0
     node.latest_fused_observation_ns = None
     frame = {
         'points': np.asarray([[0.1, 0.1, 0.1]]),
         'stamp_msg': TimeMsg(sec=10),
+        'source_id': ('camera', 9_980_000_000),
         'reliability': np.ones(1),
         'logits': np.asarray([[0.0, 6.0]]),
         'features': None, 'colors': None, 'processed_count': 1,
@@ -585,6 +587,63 @@ def test_approach_goal_rejects_low_confidence_road_argmax():
     assert node._last_approach_was_safe is False
 
 
+def test_indoor_approach_rejects_furniture_labelled_as_floor():
+    node = make_approach_node(np.array([4.0, 0.0, 0.0]))
+    node.query_approach_robot_height_m = 0.0
+    node.query_approach_ground_tolerance_m = 0.1
+    node.voxel_map = VoxelMap(voxel_size=0.1, K=3, evidence_decay=1.0)
+    # Same XY, same confident floor posterior: the old height cost preferred
+    # the furniture return closer to the body over the genuine ground return.
+    node.voxel_map.update(
+        np.repeat([[2.0, 0.0, -0.225], [2.0, 0.0, 0.05]], 3, axis=0),
+        np.ones(6), np.tile([12.0, 0.0, 0.0], (6, 1)),
+        timestamp_sec=1.0)
+
+    old_key, _ = node.find_approach_goal(
+        np.array([0.0, 0.0, 0.0]), query_class_idx=1)
+    assert old_key == (20, 0, 0)
+    node.query_approach_robot_height_m = 0.225
+    key, goal = node.find_approach_goal(
+        np.array([0.0, 0.0, 0.0]), query_class_idx=1)
+
+    assert key == (20, 0, -3)
+    np.testing.assert_allclose(goal, [2.05, 0.05, -0.25], atol=1e-6)
+    assert node._last_approach_diagnostics['ground_height_rejected'] == 1
+
+
+def test_indoor_ground_band_follows_robot_height_in_odom():
+    for odom_z_shift in (0.0, 7.0):
+        node = make_approach_node(np.array([4.0, 0.0, odom_z_shift]))
+        node.query_approach_robot_height_m = 0.225
+        node.query_approach_ground_tolerance_m = 0.1
+        ground_z = odom_z_shift - 0.225
+        # Preserve ground centers within the quantization band on either side;
+        # reject equally confident floor labels just outside that band.
+        for index, delta in enumerate((-0.099, 0.099, -0.101, 0.101)):
+            node.voxel_map.add(
+                (20, index, 0), [2.0, 0.0, ground_z + delta], 0)
+
+        snapshot = node._build_query_approach_snapshot()
+
+        assert [voxel.key for voxel in snapshot.voxels] == [
+            (20, 0, 0), (20, 1, 0)]
+        assert snapshot.filtered_diagnostics['ground_height_rejected'] == 2
+
+
+def test_approach_without_configured_robot_height_keeps_existing_behavior():
+    node = make_approach_node(np.array([4.0, 0.0, 0.0]))
+    node.query_approach_robot_height_m = 0.0
+    node.query_approach_ground_tolerance_m = 0.1
+    node.voxel_map.add((20, 0, 0), [2.0, 0.0, 0.0], 0)
+
+    key, goal = node.find_approach_goal(
+        np.array([0.0, 0.0, 0.0]), query_class_idx=1)
+
+    assert key == (20, 0, 0)
+    np.testing.assert_allclose(goal, [2.0, 0.0, 0.0])
+    assert node._last_approach_diagnostics['ground_height_rejected'] == 0
+
+
 def test_school_parking_regression_avoids_goal_behind_yellow_vehicle():
     node = make_approach_node(np.array([5.03, -2.40, 0.0]))
     object_position = np.array([1.86, -4.29, 0.0])
@@ -765,6 +824,7 @@ def test_fusion_uses_sensor_observation_time_and_retries_pending_query():
     class FakeMap:
         def update(self, **kwargs):
             updates.append(kwargs)
+            return 1, 0
 
         def get_visualization_clouds(self):
             return [], []
@@ -773,6 +833,7 @@ def test_fusion_uses_sensor_observation_time_and_retries_pending_query():
     node.voxel_map = FakeMap()
     node.entropy_publish_every_n_processed = 2
     node.cloud_publish_stride = 2
+    node.fused_frame_count = 0
     node.retry_pending_query = lambda: retries.append(True)
     frame_data = {
         'reliability': np.ones(1),
@@ -780,6 +841,7 @@ def test_fusion_uses_sensor_observation_time_and_retries_pending_query():
         'features': None,
         'colors': None,
         'stamp_msg': TimeMsg(sec=12, nanosec=500_000_000),
+        'source_id': ('camera', 12_480_000_000),
         'processed_count': 1,
         'total_points': 1,
         'motion_reliability': 1.0,
@@ -791,6 +853,7 @@ def test_fusion_uses_sensor_observation_time_and_retries_pending_query():
         frame_data, np.asarray([[1.0, 2.0, 3.0]]))
 
     assert updates[0]['timestamp_sec'] == 12.5
+    assert updates[0]['source_id'] == ('camera', 12_480_000_000)
     assert retries == [True]
 
 
@@ -805,6 +868,257 @@ def test_fusion_rejects_missing_observation_time():
 
     assert not node._fuse_projected_semantic_frame(
         frame_data, np.asarray([[1.0, 2.0, 3.0]]))
+
+
+def make_clocked_fusion_node():
+    from types import SimpleNamespace
+    from message_filters import ApproximateTimeSynchronizer, SimpleFilter
+    from rclpy.clock import ROSClock, JumpThreshold
+    from rclpy.duration import Duration
+    from rclpy.time_source import TimeSource
+    from rosgraph_msgs.msg import Clock
+    from tf2_ros import Buffer
+
+    clock = ROSClock()
+    source = TimeSource()
+    source.attach_clock(clock)
+    source.ros_time_is_active = True
+    source.clock_callback(Clock(clock=TimeMsg(sec=10)))
+    node = object.__new__(GABsvmNode)
+    node.voxel_map = VoxelMap(K=2, evidence_decay=1.0)
+    node.get_clock = lambda: clock
+    node.get_logger = lambda: SimpleNamespace(warn=lambda msg: None, info=lambda msg: None)
+    node.tf_buffer = Buffer()
+    node.pending_tf_frames = deque()
+    node.ts = ApproximateTimeSynchronizer([SimpleFilter() for _ in range(3)], 10, .2)
+    node.imu_buffer = deque()
+    node.latest_observation_ns = node.latest_fused_observation_ns = None
+    node._last_query_retry_map_revision = node._last_query_retry_time_sec = None
+    node.entropy_publish_every_n_processed = 1
+    node.cloud_publish_stride = 100
+    node.fused_frame_count = 0
+    node.odom_frame = 'odom'
+    node.pub_entropy_data = CapturingPublisher()
+    node.retry_pending_query = lambda: None
+    node.consecutive_tf_drops = node.tf_queue_drop_count = 0
+    node.tf_retry_max_age_sec = 3.0
+    handle = clock.create_jump_callback(
+        JumpThreshold(min_forward=None, min_backward=Duration(nanoseconds=-1),
+                      on_clock_change=False), post_callback=node._on_clock_jump)
+    return node, source, handle
+
+
+def fusion_frame(cloud_ns, source_ns, points):
+    return {
+        'points': points,
+        'stamp_msg': TimeMsg(sec=cloud_ns // 10**9, nanosec=cloud_ns % 10**9),
+        'source_id': ('camera', source_ns),
+        'reliability': np.ones(len(points)),
+        'logits': np.tile([6.0, 0.0], (len(points), 1)),
+        'features': None, 'colors': None, 'processed_count': 1,
+    }
+
+
+def test_confirmed_ros_clock_restart_clears_old_tf_queue_and_source_history():
+    from geometry_msgs.msg import TransformStamped
+    from rclpy.time import Time
+    from rosgraph_msgs.msg import Clock
+
+    node, source, handle = make_clocked_fusion_node()
+    point = np.array([[0.01, 0.01, 0.01]])
+    try:
+        node.voxel_map.update(point, [1.0], [6.0, 0.0], timestamp_sec=1.0,
+                              source_id=('camera', 1_000_000_000))
+        node._fuse_projected_semantic_frame(
+            fusion_frame(10_000_000_000, 10_000_000_000, point), point)
+        node.pending_tf_frames.append({'old_clock_frame': True})
+        transform = TransformStamped()
+        transform.header.frame_id = 'odom'
+        transform.child_frame_id = 'lidar'
+        transform.header.stamp = TimeMsg(sec=1)
+        transform.transform.rotation.w = 1.0
+        node.tf_buffer.set_transform(transform, 'test')
+        transform.child_frame_id = 'camera'
+        node.tf_buffer.set_transform_static(transform, 'test')
+        before = node.voxel_map.voxels[(0, 0, 0)]['alpha'].copy()
+
+        source.clock_callback(Clock(clock=TimeMsg(sec=1)))
+
+        assert node.pending_tf_frames == deque()
+        assert node.latest_observation_ns is node.latest_fused_observation_ns is None
+        assert 'source_history' not in node.voxel_map.voxels[(0, 0, 0)]
+        np.testing.assert_array_equal(node.voxel_map.voxels[(0, 0, 0)]['alpha'], before)
+        assert not node.tf_buffer.can_transform('odom', 'lidar', Time(nanoseconds=10**9))
+        assert node.tf_buffer.can_transform('odom', 'camera', Time(nanoseconds=10**9))
+        published = len(node.pub_entropy_data.messages)
+        node.publish_entropy_data()
+        assert len(node.pub_entropy_data.messages) == published
+
+        assert node._fuse_projected_semantic_frame(
+            fusion_frame(1_000_000_000, 1_000_000_000, point), point)
+        voxel = node.voxel_map.voxels[(0, 0, 0)]
+        assert voxel['last_decay_at_sec'] == 1.0
+        assert np.isclose(voxel['weight_sum'], 3.0)
+        assert node.latest_fused_observation_ns == 1_000_000_000
+    finally:
+        handle.unregister()
+
+
+def test_clock_restart_releases_full_synchronizer_queue_and_old_imu():
+    from message_filters import ApproximateTimeSynchronizer, SimpleFilter
+    from rosgraph_msgs.msg import Clock
+    from sensor_msgs.msg import Image
+
+    node, source, handle = make_clocked_fusion_node()
+    inputs = [SimpleFilter() for _ in range(3)]
+    node.ts = ApproximateTimeSynchronizer(inputs, 10, .2)
+    matched = []
+    node.ts.registerCallback(lambda *messages: matched.append(messages))
+    try:
+        source.clock_callback(Clock(clock=TimeMsg(sec=100)))
+        for index in range(10):
+            inputs[0].signalMessage(Image(header=Header(
+                stamp=TimeMsg(sec=99, nanosec=index * 50_000_000))))
+        node.imu_buffer.append((99.0, np.zeros(3), np.zeros(3)))
+        assert len(node.ts.queues[0]) == 10
+
+        source.clock_callback(Clock(clock=TimeMsg(sec=1)))
+
+        assert all(not queue for queue in node.ts.queues)
+        assert not node.imu_buffer
+        for stamp in (1, 2, 3):
+            for stream in inputs:
+                stream.signalMessage(Image(header=Header(stamp=TimeMsg(sec=stamp))))
+        assert [messages[0].header.stamp.sec for messages in matched] == [1, 2, 3]
+    finally:
+        handle.unregister()
+
+
+def test_lagging_ros_clock_does_not_reset_source_history_during_tf_retry():
+    from geometry_msgs.msg import TransformStamped
+    from rosgraph_msgs.msg import Clock
+
+    node, source, handle = make_clocked_fusion_node()
+    point = np.array([[0.01, 0.01, 0.01]])
+    try:
+        for nanosec in (0, 80_000_000):
+            transform = TransformStamped()
+            transform.header.frame_id = 'odom'
+            transform.child_frame_id = 'lidar'
+            transform.header.stamp = TimeMsg(sec=10, nanosec=nanosec)
+            transform.transform.rotation.w = 1.0
+            node.tf_buffer.set_transform(transform, 'test')
+            ns = 10_000_000_000 + nanosec
+            node._fuse_projected_semantic_frame(fusion_frame(ns, ns, point), point)
+        voxel = node.voxel_map.voxels[(0, 0, 0)]
+        before = voxel['alpha'].copy()
+        pending = fusion_frame(10_040_000_000, 10_000_000_000, point)
+        node.pending_tf_frames.append({
+            'queued_at_ns': 10_000_000_000, 'target_frame': 'odom',
+            'source_frame': 'lidar', 'stamp': pending['stamp_msg'], 'frame_data': pending,
+        })
+        waiting = {'another_pending_frame': True}
+        node.pending_tf_frames.append(waiting)
+
+        source.clock_callback(Clock(clock=TimeMsg(sec=10, nanosec=40_000_000)))
+        node.retry_pending_tf_frames()
+
+        np.testing.assert_array_equal(voxel['alpha'], before)
+        assert voxel['observation_count'] == 2
+        assert voxel['source_history']['camera']['stamps'] == [10_000_000_000, 10_080_000_000]
+        assert node.latest_observation_ns == node.latest_fused_observation_ns == 10_080_000_000
+        assert node.pending_tf_frames == deque([waiting])
+    finally:
+        handle.unregister()
+
+
+def test_duplicate_source_does_not_refresh_published_entropy_or_bypass_ordering():
+    from threading import Lock
+    from rosgraph_msgs.msg import Clock
+    from semantic_mapping.runtime.active_perception_node import (
+        ActivePerceptionNode, stale_required_inputs,
+    )
+
+    node, source, handle = make_clocked_fusion_node()
+    node.voxel_map = VoxelMap(K=2)
+    point = np.array([[0.01, 0.01, 0.01]])
+    receiver = object.__new__(ActivePerceptionNode)
+    receiver.odom_frame = 'odom'
+    receiver.state_lock = Lock()
+    try:
+        node._fuse_projected_semantic_frame(
+            fusion_frame(10_000_000_000, 10_000_000_000, point), point)
+        source.clock_callback(Clock(clock=TimeMsg(sec=12, nanosec=520_000_000)))
+        node.voxel_map.prune(12.5)
+        before = node.voxel_map.voxels[(0, 0, 0)]['alpha'].copy()
+        revision = node.voxel_map.revision
+        assert not node._fuse_projected_semantic_frame(
+            fusion_frame(10_040_000_000, 10_000_000_000, point), point)
+
+        assert len(node.pub_entropy_data.messages) == 1
+        receiver.entropy_cb(node.pub_entropy_data.messages[-1])
+        assert stale_required_inputs(
+            12.52, 12.5, receiver.cloud_stamp_sec, 12.5, 2.5, 2.5, 2.5
+        ) == ('entropy_cloud',)
+        np.testing.assert_array_equal(node.voxel_map.voxels[(0, 0, 0)]['alpha'], before)
+        assert node.voxel_map.revision == revision
+        assert node.latest_observation_ns == 10_040_000_000
+        assert node.latest_fused_observation_ns == 10_000_000_000
+
+        # An independent source between the two clouds is still an old cloud.
+        assert not node._fuse_projected_semantic_frame(
+            fusion_frame(10_020_000_000, 10_020_000_000, point), point)
+        assert node.latest_observation_ns == 10_040_000_000
+        assert len(node.pub_entropy_data.messages) == 1
+    finally:
+        handle.unregister()
+
+
+def test_dropped_and_duplicate_frames_do_not_consume_publication_cadence():
+    node, source, handle = make_clocked_fusion_node()
+    node.semantic_backend = 'segformer'
+    point = np.array([[.01, .01, .01]])
+    node.entropy_publish_every_n_processed = 2
+    node.cloud_publish_stride = 3
+    node.pub_semantic = CapturingPublisher()
+    node.pub_uncertainty = CapturingPublisher()
+    try:
+        for processed_count, stamp in ((1, 10_000_000_000), (4, 10_200_000_000),
+                                       (7, 10_400_000_000)):
+            frame = fusion_frame(stamp, stamp, point)
+            frame.update(processed_count=processed_count, total_points=1,
+                         motion_reliability=1.0, angular_rms=0.0,
+                         acceleration_deviation=0.0)
+            assert node._fuse_projected_semantic_frame(frame, point)
+            assert not node._fuse_projected_semantic_frame(frame, point)
+            assert not node._fuse_projected_semantic_frame(
+                fusion_frame(stamp - 1, stamp - 1, point), point)
+        assert node.fused_frame_count == 3
+        assert len(node.pub_entropy_data.messages) == 1
+        assert len(node.pub_semantic.messages) == len(node.pub_uncertainty.messages) == 1
+        assert node.pub_semantic.messages[0].header.stamp == TimeMsg(
+            sec=10, nanosec=400_000_000)
+    finally:
+        handle.unregister()
+
+
+def test_same_source_new_coverage_advances_the_published_observation_time():
+    node, source, handle = make_clocked_fusion_node()
+    points = np.array([[0.01, 0.01, 0.01], [0.21, 0.01, 0.01]])
+    try:
+        node._fuse_projected_semantic_frame(
+            fusion_frame(10_000_000_000, 10_000_000_000, points[:1]), points[:1])
+        assert node._fuse_projected_semantic_frame(
+            fusion_frame(10_040_000_000, 10_000_000_000, points), points)
+
+        assert len(node.pub_entropy_data.messages) == 2
+        assert node.pub_entropy_data.messages[-1].header.stamp == TimeMsg(
+            sec=10, nanosec=40_000_000)
+        assert node.latest_fused_observation_ns == 10_040_000_000
+        assert node.voxel_map.voxels[(0, 0, 0)]['observation_count'] == 1
+        assert node.voxel_map.voxels[(2, 0, 0)]['observation_count'] == 1
+    finally:
+        handle.unregister()
 
 
 def test_stale_query_feature_is_not_interpreted_as_latest_text():

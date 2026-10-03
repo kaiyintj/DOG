@@ -1,6 +1,6 @@
 # 运行手册
 
-核对日期：2026-09-29
+核对日期：2026-10-03
 
 本手册只保存当前可执行流程。能力边界见 [PROJECT_STATUS.md](PROJECT_STATUS.md)，
 室内实验定义和结果见 [INDOOR_GAZEBO_BENCHMARK.md](INDOOR_GAZEBO_BENCHMARK.md)。
@@ -19,12 +19,22 @@ export HF_HOME="$SEMANTIC_WS/.cache/huggingface"
 训练/单图工具已迁到 `semantic_mapping/offline/`，仿真启动门已迁到 `gazebo/`；
 `ros2 run` 和 launch 的名称、参数不变。更新源码后需要重新构建，让安装入口指向新位置。
 
+10 月 2 日起体素融合按平均质量乘有限点支持注入，长观测空窗最多增加本次一份预算；
+`source_history_size: 32` 限制每体素、每相机的近期源图记录。三个感知后端及 CARLA
+体素消融均保留源身份。规则、采样等价前提与回归命令见
+[证据预算说明](FUSION_EVIDENCE_BUDGET.md)，旧实验的证据量与查询就绪时间需在当前版本复测。
+后续审核已修正 ROS 时间边界：仅时钟自身回跳清理旧源与动态 TF；全帧重复或零贡献
+不刷新语义输出观测时间，同源图像的新覆盖仍正常融合。
+10 月 3 日补齐同步器和 IMU 缓存回跳清理、剪枝时间不回退及 CARLA 统一统计时刻。
+导航桥的重试与超时检查使用稳定墙钟定时器，仿真暂停时仍能执行。
+语义/不确定性输出的发布步长按成功融合帧计数，TF 丢帧和重复源不消耗发布名额。
+
 只修改 `semantic_mapping` 后，定向构建该包：
 
 ```bash
 cd "$SEMANTIC_WS"
 source /opt/ros/humble/setup.bash
-colcon build --symlink-install --packages-select semantic_mapping
+colcon build --base-paths src --symlink-install --packages-select semantic_mapping
 source "$SEMANTIC_WS/install/setup.bash"
 ```
 
@@ -117,7 +127,7 @@ Fixed Frame 使用 `odom`。根据需要添加以下 display：
 | OccupancyGrid | `/semantic_cost_map` | 语义代价地图 |
 | Image | `/segformer/color_mask` | 分割可视化 |
 | PoseStamped | `/query_target_pose` | 目标估计 |
-| PoseStamped | `/goal_pose` | 语义约束接近点，路径/碰撞由 Nav2 检查 |
+| PoseStamped | `/goal_pose` | 语义约束接近点，交由 Nav2 规划执行 |
 
 如果 RViz 没打开，先确认传感器门是否已成功退出，再确认进程：
 
@@ -230,10 +240,12 @@ ros2 topic echo /semantic_speed_scale
 ros2 topic echo /perception_mode
 ```
 
-`/semantic_speed_scale` 是主动感知速度倍率。室内配置中，正常倍率范围为 0.3–1.0；路径
-缺少地图支持时目标倍率为 0.65；必要输入过期时降到 0.3；速度命令超过 0.25 秒未更新时
+`/semantic_speed_scale` 是主动感知速度倍率。室内配置中，正常倍率范围为 0.65–1.0；路径
+缺少地图支持或必要输入过期时降到 0.65；速度命令超过 0.25 秒未更新时
 watchdog 发布零速。不确定性点云按最新融合观测的源时间判断过期，包含 TF 等待时间。
 `STALE[...]` 会在 `/perception_mode` 中说明缺少或过期的输入。
+原 0.3 下限将 Nav2 的 0.16 m/s 接近命令缩小为约 0.05 m/s，实际 Go2 在清晰地面上的
+末段前进仅约 0.005 m/s；室内下限调整用于保持可执行步态。其它 profile 不变。
 
 这些话题证明减速链在运行，不单独证明减速提高了 Navigation Success。正式收益需要同一
 world、start、query、seed 和障碍条件下做 OFF/ON 对比。
@@ -262,6 +274,28 @@ ros2 run semantic_mapping run_indoor_semantic_benchmark \
 
 可用 case 以 manifest 为准。先运行 `validate_kitchen_close` 验证起点，再运行
 `chair_kitchen` 或 `table_kitchen`。runner 会创建目标输出目录，因此不要复用已存在路径。
+
+另有 `chair_kitchen_facing`（厨房位置，朝向 -1.3 rad）与 `chair_dining_southeast`。
+室内接近距离下限为 1.3 m、期望为 1.4 m，搜索半径为 2.5 m，并要求机器人同侧
+落点；单个道路
+体素可通行不代表机器人足迹有净空。原厨房朝向的识别失败和旧 1.0 m 接近点的停滞
+结果均保留在 10 月 3 日本机批次中。
+室内 SegFormer 每次成功融合均发布语义/不确定性点云，避免 TF 丢帧下低频抽样造成
+输出过期；实际仿真仍保留输入有效性检查。
+
+`chair_kitchen_mapping_pitch` 在同一厨房起点增加预先定义的低头建图：定位预热后，
+3 sim s 渐变至机身 pitch +0.30 rad、保持 10 sim s、3 sim s 恢复，至少再观察 5 sim s。
+实际姿态恢复水平才查询。MID360 真实射线在水平静止时看不到约 2.34 m 内的地面，
+此用例补采近处地面；室内接近点还要求位于 `robot_odom_z - 0.225 m` 上下 0.10 m。
+低头建图与原静止流程分别记录，GT 只作观测与验收。
+10 月 3 日当前配置已通过该用例，原始结果与全部尝试见
+[复验批次](results/indoor_gazebo_20261003/README.md)。
+
+正例从查询发出起最多观察 90 秒仿真时间，并保留 300 秒墙钟上限。Nav2 成功后继续
+观察 5 秒仿真时间：需收到新的最终控制命令，最终线/角速度不超过 0.001 m/s、rad/s，
+GT 水平位移不超过 0.05 m，才判停止通过。`result.json` 中 `passed=true` 且
+`recording.stop_observation.passed=true` 表示本次功能链到达与停止通过；只有 accepted
+回执不够。失去有效输入或仿真退出会提前结束；需要中止时在运行终端按 Ctrl+C。
 
 `/home/yk/ws/indoor_benchmark_runs/` 是统一的本机实验结果根目录，和源码仓库分开保存。
 正式公开结果应从 `result.json` 提炼为小型表格或报告，不把 ROS logs、`simulation.log` 或诊断

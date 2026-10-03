@@ -312,9 +312,11 @@ def test_factor_summary_preserves_empty_bins_and_excludes_unsupported():
     assert unsupported_bin['brier'] is None
 
 
+@pytest.mark.parametrize('missing_rgb_tail', [False, True])
 def test_evaluate_runs_end_to_end_on_a_minimal_offline_reliability_dataset(
     tmp_path,
     monkeypatch,
+    missing_rgb_tail,
 ):
     """Exercise dataset I/O, projection, GT, posterior and ablations offline."""
     dataset = tmp_path / 'synthetic_reliability_v1'
@@ -398,6 +400,12 @@ def test_evaluate_runs_end_to_end_on_a_minimal_offline_reliability_dataset(
         'ego_motion_profile': 'stationary',
         'moving_targets': False,
     }
+    if missing_rgb_tail:
+        tail = json.loads(json.dumps(metadata))
+        tail['lidar'].update(frame=2, timestamp_sec=11.0)
+        tail['semantic_lidar'].update(frame=2, timestamp_sec=11.0)
+        (dataset / 'metadata/00000002.json').write_text(json.dumps(tail), encoding='utf-8')
+        manifest['frames'].append('metadata/00000002.json')
     (dataset / 'manifest.json').write_text(
         json.dumps(manifest), encoding='utf-8')
     params_path = tmp_path / 'reliability.yaml'
@@ -468,7 +476,18 @@ def test_evaluate_runs_end_to_end_on_a_minimal_offline_reliability_dataset(
         limit=0,
     )
 
+    from semantic_mapping.carla import carla_evaluate_reliability as evaluator_module
+    source_calls = []
+    original_update = evaluator_module.VoxelAblation.update
+
+    def capture_source(self, *args, **kwargs):
+        source_calls.append(kwargs['source_id'])
+        return original_update(self, *args, **kwargs)
+
+    monkeypatch.setattr(evaluator_module.VoxelAblation, 'update', capture_source)
+
     returned_report = evaluate(args)
+    assert source_calls == [('carla_rgb', 1_000_000_000)]
 
     per_point_path = output / 'per_point.csv'
     with per_point_path.open(newline='', encoding='utf-8') as handle:
@@ -508,8 +527,10 @@ def test_evaluate_runs_end_to_end_on_a_minimal_offline_reliability_dataset(
     assert returned_report['model']['checkpoint_id2label'] == {
         0: 'road', 1: 'car'}
     assert report['overall']['accuracy'] == pytest.approx(1.0)
-    assert report['alignment']['accepted_frame_count'] == 1
+    assert report['alignment']['accepted_frame_count'] == 1 + int(missing_rgb_tail)
     assert report['alignment']['rejected_frame_count'] == 0
+    assert report['ablation']['voxel_evaluation_time_sec'] == {
+        '0': 11.0 if missing_rgb_tail else 1.0}
     assert report['experiment']['motion_weighting'] == (
         'temporal_relative_camera_pose_v2')
     assert report['motion_by_offset_ms']['0'][

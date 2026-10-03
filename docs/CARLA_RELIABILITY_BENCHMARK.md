@@ -1,6 +1,6 @@
 # CARLA 三维语义可靠性基准
 
-核对日期：2026-09-29。命令与当前代码对应；历史结果见
+核对日期：2026-10-02。命令与当前代码对应；历史结果见
 [Motion V2 记录](results/carla_motion_v2_20260813/README.md)，不代表当前版本已重跑实验。
 
 ## 1. 目的、范围与旧基准的边界
@@ -388,6 +388,15 @@ full = 上式 * r_motion = r_combined
 uncertainty 和动态场景警告。若 ego 或目标运动，动态物体拖影本身会影响 voxel GT，
 应优先以 stationary ego、`--no-moving-targets` 条件报告主结果，再把动态结果列为
 压力测试。
+
+10 月 2 日起六种体素消融还共享实际所选 RGB 的源图身份与 `source_history_size`
+（默认 32），同一历史图像配合不同 LiDAR 帧时，已有体素不重复注入，新覆盖仍能进入地图。
+有限支持、观测质量与历史老化的最新规则见 [证据预算说明](FUSION_EVIDENCE_BUDGET.md)；
+旧体素结果需重新运行后才能和当前实现比较，点级 reliability 公式与独立 GT 输入规则不变。
+
+10 月 3 日起，六张地图在报告前统一老化到已处理 LiDAR 的最后时刻，包括缺少匹配
+RGB 的尾帧，避免把早期体素与刚观测体素按不同时间统计。不在此步执行 TTL 删除，
+GT 支持与 coverage 不变；`ablation.voxel_evaluation_time_sec` 记录各 offset 的统计终点。
 
 ## 10. 复现、验收与限制
 
