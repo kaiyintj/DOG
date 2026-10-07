@@ -59,6 +59,9 @@ def _compose_simulation(context):
     if model_override:
         frontend_overrides['model_id'] = model_override
     starts = {}
+    confirmation_override = LaunchConfiguration('confirmation_policy').perform(context)
+    mapper_overrides = {} if not confirmation_override else {
+        'confirmation_policy': confirmation_override}
     for axis, default in (('x', '3.5' if indoor else '0.0'),
                           ('y', '1.0' if indoor else '0.0'),
                           ('z', '0.35'), ('heading', '0.0')):
@@ -125,6 +128,8 @@ def _compose_simulation(context):
             parameters=[str(preset), {
                 'ontology_profile': profile.id, 'use_sim_time': True,
                 'semantic_backend': 'segformer',
+                **mapper_overrides,
+                'fusion_trace_dir': LaunchConfiguration('fusion_trace_dir').perform(context),
                 'segformer_use_full_posterior': (
                     LaunchConfiguration('segformer_use_full_posterior').perform(context)
                     == 'true'),
@@ -153,6 +158,13 @@ def generate_launch_description():
             'model_id', default_value='',
             description='Optional checkpoint override; otherwise use the profile preset.'),
         DeclareLaunchArgument('gui', default_value='true'),
+        DeclareLaunchArgument(
+            'confirmation_policy', default_value='',
+            choices=['', 'none', 'always', 'age', 'age_quality'],
+            description='Optional frozen confirmation policy for the four-arm experiment.'),
+        DeclareLaunchArgument(
+            'fusion_trace_dir', default_value='',
+            description='Optional new directory for actual fusion inputs used in paired replay.'),
         DeclareLaunchArgument(
             'segformer_use_full_posterior', default_value='true',
             choices=['true', 'false'],

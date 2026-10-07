@@ -1,0 +1,9 @@
+run,passed,reason,goals,confirmation_state,new_confirmation,candidate_attempts,review_attempts,sources,confirmation_sim_sec,confirmation_wall_sec,query_wall_sec,origin_error_xy_m,center_error_xy_m,surface_error_3d_m,stop_passed,motion_completed,remaining_owned_pids,unknown_bindings
+clear_none_01,True,navigation_chain_smoke_pass,1,executing,False,,0,0,0.0,0.0,228.3616809630039,0.3328180301026646,0.3333169823899351,0.08951498310730865,True,,[],0
+clear_always_01,False,unconfirmed,0,unconfirmed,False,1,1,10,7.969999999999999,17.564942441000312,28.68991451599868,,,,True,,[],0
+clear_age_01,True,navigation_chain_smoke_pass,1,executing,False,1,0,0,0.0,0.03514071400422836,22.16134649400192,0.6367279712880887,0.6346669995425125,0.3516806764095608,True,,[],1
+clear_age_quality_01,False,unconfirmed,0,unconfirmed,False,1,1,10,6.725000000000001,14.410472358998959,25.767517460000818,,,,True,,[],0
+long_gap_none_01,False,navigation_failed,1,executing,False,,0,0,0.0,0.0,237.53509042500082,2.109446728735424,2.112244170305493,1.85791681789441,,True,[],1
+long_gap_always_01,False,input_invalid,0,input_invalid,False,1,1,1,3.420000000000016,7.263073914997221,17.902030288001697,,,,True,True,[],0
+long_gap_age_01,True,navigation_chain_smoke_pass,1,executing,False,1,0,0,0.0,0.0919801260024542,27.56045421300223,0.3976580957123082,0.3997889255595808,0.09068720650540123,True,True,[],0
+long_gap_age_quality_01,False,unconfirmed,0,unconfirmed,False,1,1,10,7.859999999999985,16.824325938003312,27.377148975996533,,,,True,True,[],1

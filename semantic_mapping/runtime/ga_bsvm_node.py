@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 import importlib
 import time
+from dataclasses import fields
 
 import rclpy
 from rclpy.clock import JumpThreshold
@@ -249,6 +250,13 @@ class GABsvmNode(Node):
         self.declare_parameter('evidence_strength', 1.0)
         self.declare_parameter('evidence_decay', 0.995)
         self.declare_parameter('evidence_decay_reference_sec', 0.1)
+        self.declare_parameter('fusion_trace_dir', '')
+        from semantic_mapping.runtime.target_confirmation import ConfirmationPolicy
+        self.declare_parameter('confirmation_policy', 'none')
+        self.declare_parameter('confirmation_motion_topic', '')
+        for item in fields(ConfirmationPolicy):
+            if item.name != 'mode':
+                self.declare_parameter('confirmation_' + item.name, item.default)
         self.declare_parameter('max_frame_evidence', 3.0)
         self.declare_parameter('source_history_size', 32)
         self.declare_parameter('max_total_evidence', 200.0)
@@ -748,6 +756,14 @@ class GABsvmNode(Node):
         self.get_logger().info(
             f'Dirichlet VoxelMap 已创建，网格精度: {self.voxel_size:.3f}m')
 
+        self.fusion_trace = None
+        trace_dir = self.get_parameter('fusion_trace_dir').value
+        if trace_dir:
+            from semantic_mapping.runtime.fusion_trace import FusionTraceWriter
+            parameters = {name: parameter.value for name, parameter
+                          in self.get_parameters_by_prefix('').items()}
+            self.fusion_trace = FusionTraceWriter(trace_dir, parameters)
+
         self.pub_semantic = self.create_publisher(PointCloud2, self.semantic_cloud_topic, 1)
         self.pub_uncertainty = self.create_publisher(PointCloud2, self.uncertainty_cloud_topic, 1)
         # 高精度熵数据话题: x/y/z + intensity(float32 香农熵)，供 active_perception_node 直读
@@ -829,6 +845,16 @@ class GABsvmNode(Node):
         self._last_query_retry_time_sec = None
         self.latest_observation_ns = None
         self.latest_fused_observation_ns = None
+        from semantic_mapping.runtime.confirmation_ros import TargetConfirmationAdapter
+        policy = ConfirmationPolicy(
+            mode=self.get_parameter('confirmation_policy').value,
+            **{item.name: self.get_parameter('confirmation_' + item.name).value
+               for item in fields(ConfirmationPolicy) if item.name != 'mode'})
+        if policy.mode != 'none' and self.semantic_backend != 'segformer':
+            raise ValueError('Target confirmation requires the SegFormer categorical backend')
+        self.confirmation_max_age_sec = policy.max_age_sec
+        self.confirmation = TargetConfirmationAdapter(
+            self, policy, self.get_parameter('confirmation_motion_topic').value)
         self._clock_jump_handle = self.get_clock().create_jump_callback(
             JumpThreshold(
                 min_forward=None,
@@ -880,10 +906,14 @@ class GABsvmNode(Node):
         self._last_query_retry_map_revision = None
         self._last_query_retry_time_sec = None
         self.fused_frame_count = 0
+        if getattr(self, 'confirmation', None) is not None:
+            self.confirmation.clock_reset()
 
     def destroy_node(self):
         """Release the clock callback before destroying ROS subscriptions."""
         self._clock_jump_handle.unregister()
+        if getattr(self, 'confirmation', None) is not None:
+            self.confirmation.close()
         return super().destroy_node()
 
     def semantic_capability_callback(self, message):
@@ -1056,6 +1086,9 @@ class GABsvmNode(Node):
         if not self.last_query_text:
             self.get_logger().warn('收到空查询，忽略。')
             return
+        confirmation = getattr(self, 'confirmation', None)
+        if confirmation is not None:
+            confirmation.cancel('query_replaced')
         self.query_retry_pending = False
         self.last_query_feature = None
         self._last_query_retry_map_revision = None
@@ -1175,6 +1208,9 @@ class GABsvmNode(Node):
             max_distance_m=self.voxel_prune_radius_m,
             max_count=self.voxel_max_count,
         )
+        trace = getattr(self, 'fusion_trace', None)
+        if trace is not None:
+            trace.prune(now_sec, robot_position)
         if (
             self.current_goal_key is not None
             and self.current_goal_key not in self.voxel_map.voxels
@@ -1214,8 +1250,31 @@ class GABsvmNode(Node):
             query_color_weight=getattr(self, 'query_color_weight', 0.35),
             query_min_color_support_ratio=getattr(self, 'query_min_color_support_ratio', 0.3),
         )
+        stamp_ns = getattr(self, 'latest_observation_ns', None)
+        map_time = None if stamp_ns is None else stamp_ns / 1e9
+        mapping = getattr(self, 'voxel_map', None)
+        if map_time is None and mapping is not None:
+            stamps = [v.get('last_decay_at_sec') for v in self.voxel_map.voxels.values()]
+            map_time = max((stamp for stamp in stamps if stamp is not None), default=None)
         ranked, diagnostics = rank_query_clusters(
-            candidates, policy, self.get_robot_position(), query_class_idx, query_color)
+            candidates, policy, self.get_robot_position(), query_class_idx, query_color,
+            map_time_sec=map_time,
+            recent_observation_sec=getattr(self, 'confirmation_max_age_sec', 60.0))
+        if mapping is not None and query_class_idx is not None:
+            updates = getattr(mapping, 'last_effective_updates', {})
+            for candidate in ranked:
+                contributions = [updates[key] for key in candidate['voxel_keys'] if key in updates]
+                total = sum(value[0] for value in contributions)
+                candidate['recent_class_support'] = (
+                    sum(value[0] * value[1][query_class_idx] for value in contributions) / total
+                    if total > 0 else None)
+                target_mass = sum(value[0] * value[1][query_class_idx] for value in contributions)
+                if target_mass > 0:
+                    center = sum(updates[key][0] * updates[key][1][query_class_idx]
+                                 * mapping.voxels[key]['pos'] for key in candidate['voxel_keys']
+                                 if key in updates) / target_mass
+                    candidate['position_shift_m'] = float(
+                        np.linalg.norm(center - candidate['pos']))
         self._last_query_clusters = ranked
         self._last_cluster_selection_diagnostics = diagnostics
         return ranked[0] if ranked else None
@@ -1472,6 +1531,8 @@ class GABsvmNode(Node):
                 'color_rgb': voxel.get('color_rgb'),
                 'score': score,
                 'evidence': voxel['weight_sum'],
+                'last_effective_observed_at_sec': voxel.get('last_effective_observed_at_sec'),
+                'uncertainty': self.voxel_map.get_uncertainty(key)[2],
             })
         selected = self.select_query_cluster(
             candidates,
@@ -1602,6 +1663,9 @@ class GABsvmNode(Node):
         target.pose.position.z = float(object_pos[2])
         target.pose.orientation.w = 1.0
         self.query_target_pub.publish(target)
+        confirmation = getattr(self, 'confirmation', None)
+        if confirmation is not None:
+            confirmation.note_publication(selected)
 
         goal = PoseStamped()
         goal.header.frame_id = self.odom_frame
@@ -1627,6 +1691,12 @@ class GABsvmNode(Node):
         log_failure=True,
     ):
         self._record_query_attempt()
+        confirmation = getattr(self, 'confirmation', None)
+        if (confirmation is not None and confirmation.policy.mode != 'none'
+                and self.projection_calibration_verified):
+            self.query_retry_pending = False
+            confirmation.start(query_class_idx, query_color)
+            return confirmation.session.status == 'executing'
         (
             selected,
             candidate_count,
@@ -1857,7 +1927,8 @@ class GABsvmNode(Node):
                 return logits, features, colors
 
             self._process_semantic_frame(
-                pc_msg, height, width, semantic_lookup, source_image_msg.header)
+                pc_msg, height, width, semantic_lookup, source_image_msg.header,
+                **self._trace_images(cv_img))
         except Exception as exc:
             self.get_logger().error(f'CLIP 投影融合出错: {exc}')
 
@@ -1922,7 +1993,8 @@ class GABsvmNode(Node):
                 return logits, None, colors
 
             self._process_semantic_frame(
-                pc_msg, height, width, semantic_lookup, source_image_msg.header)
+                pc_msg, height, width, semantic_lookup, source_image_msg.header,
+                **self._trace_images(source_image, posterior))
         except Exception as exc:
             self.get_logger().error(
                 f'SegFormer full-posterior fusion failed: {exc}')
@@ -1990,9 +2062,15 @@ class GABsvmNode(Node):
                 return logits, None, colors
 
             self._process_semantic_frame(
-                pc_msg, height, width, semantic_lookup, source_image_msg.header)
+                pc_msg, height, width, semantic_lookup, source_image_msg.header,
+                **self._trace_images(source_image))
         except Exception as exc:
             self.get_logger().error(f'SegFormer 投影融合出错: {exc}')
+
+    def _trace_images(self, rgb, posterior=None):
+        if getattr(self, 'fusion_trace', None) is None:
+            return {}
+        return {'diagnostics': {'rgb': rgb, 'posterior': posterior}}
 
     def _process_semantic_frame(
         self,
@@ -2001,6 +2079,7 @@ class GABsvmNode(Node):
         width,
         semantic_lookup,
         source_header,
+        diagnostics=None,
     ):
         """Project one synchronized frame and fuse it once historical TF exists."""
         source_ns = (
@@ -2098,7 +2177,23 @@ class GABsvmNode(Node):
             'motion_reliability': motion_reliability,
             'angular_rms': angular_rms,
             'acceleration_deviation': acceleration_deviation,
+            'source_frame': source_frame,
+            'target_frame': target_frame,
         }
+        confirmation = getattr(self, 'confirmation', None)
+        needs_view = confirmation is not None and confirmation.policy.mode != 'none'
+        if diagnostics is not None or needs_view:
+            camera_points = (self.T_lidar2cam[:3, :3] @ valid_points.T).T + self.T_lidar2cam[:3, 3]
+            geometry = dict(pixel_u=valid_u, pixel_v=valid_v, camera_depth=camera_points[:, 2],
+                            camera_matrix=scale_camera_matrix(
+                                self.K, self.camera_info_width, self.camera_info_height,
+                                width, height),
+                            lidar_to_camera=self.T_lidar2cam.copy(), image_shape=(height, width),
+                            source_frame=source_frame)
+            frame_data['camera_geometry'] = geometry
+            if diagnostics is not None:
+                diagnostics.update(geometry)
+                frame_data['diagnostics'] = diagnostics
 
         if stamp.nanoseconds == 0:
             self.consecutive_tf_drops += 1
@@ -2142,8 +2237,12 @@ class GABsvmNode(Node):
         stamp,
     ):
         """Transform points at their sensor timestamp without a latest-TF fallback."""
+        matrix = self._points_transform_matrix(target_frame, source_frame, stamp)
+        return (matrix[:3, :3] @ points.T).T + matrix[:3, 3]
+
+    def _points_transform_matrix(self, target_frame, source_frame, stamp):
         if source_frame == target_frame:
-            return points
+            return np.eye(4)
         # Waiting inside a callback prevents a single-threaded executor from
         # receiving the future TF. Missing transforms are retried by a timer.
         transform = self.tf_buffer.lookup_transform(
@@ -2163,8 +2262,10 @@ class GABsvmNode(Node):
             transform.transform.rotation.z,
             transform.transform.rotation.w,
         ]
-        rotation = R.from_quat(quaternion).as_matrix()
-        return (rotation @ points.T).T + translation
+        matrix = np.eye(4)
+        matrix[:3, :3] = R.from_quat(quaternion).as_matrix()
+        matrix[:3, 3] = translation
+        return matrix
 
     def _queue_pending_tf_frame(
         self,
@@ -2275,6 +2376,20 @@ class GABsvmNode(Node):
             timestamp_sec=observation_ns / 1e9,
             source_id=frame_data['source_id'],
         )
+        if 'camera_geometry' in frame_data:
+            matrix = self._points_transform_matrix(
+                frame_data['target_frame'], frame_data['source_frame'],
+                Time.from_msg(frame_data['stamp_msg']))
+            frame_data['camera_geometry']['source_to_map'] = matrix
+            if 'diagnostics' in frame_data:
+                frame_data['diagnostics']['source_to_map'] = matrix
+        confirmation = getattr(self, 'confirmation', None)
+        if confirmation is not None:
+            confirmation.on_observation(frame_data, self.voxel_map.last_effective_updates)
+        trace = getattr(self, 'fusion_trace', None)
+        if trace is not None:
+            trace.observation(frame_data, valid_points, observation_ns, (new_count, updated_count),
+                              self.get_clock().now().nanoseconds / 1e9)
         if not (new_count or updated_count):
             return False
         self.latest_fused_observation_ns = observation_ns

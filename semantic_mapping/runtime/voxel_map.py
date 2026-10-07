@@ -90,6 +90,9 @@ class VoxelMap:
         # Monotonic map revision used by query retries.  It changes only after
         # an update or pruning pass has had a chance to mutate map state.
         self.revision = 0
+        # Positive injections from the most recent update, before total-budget
+        # rescaling. Used by confirmation without treating net growth as new data.
+        self.last_effective_updates = {}
 
     def get_voxel_indices(self, point):
         """Convert a 3D point to integer voxel coordinates."""
@@ -223,9 +226,11 @@ class VoxelMap:
         reused timestamps. Ordinary pruning never clears source admission.
         """
         timestamp_sec = self._resolve_timestamp(timestamp_sec)
+        self.last_effective_updates = {}
         for voxel in self.voxels.values():
             voxel['last_observed_at_sec'] = timestamp_sec
             voxel['last_decay_at_sec'] = timestamp_sec
+            voxel['last_effective_observed_at_sec'] = None
             voxel.pop('source_history', None)
         if self.voxels:
             self.revision += 1
@@ -307,6 +312,7 @@ class VoxelMap:
             'pos': center,
             'created_at_sec': observation_time,
             'last_observed_at_sec': observation_time,
+            'last_effective_observed_at_sec': None,
             'last_decay_at_sec': observation_time,
         }
 
@@ -340,6 +346,7 @@ class VoxelMap:
         older observations alone never rewind their history. The returned
         counts include only new/existing voxels receiving positive contribution.
         """
+        self.last_effective_updates = {}
         points = np.asarray(points, dtype=np.float32)
         reliability = np.asarray(reliability, dtype=np.float32).reshape(-1)
         logits = np.asarray(logits, dtype=np.float32)
@@ -476,6 +483,8 @@ class VoxelMap:
                     source_id is None
                     and previous_observed_sec is not None
                     and observation_time < previous_observed_sec)
+                if clock_rewound:
+                    voxel['last_effective_observed_at_sec'] = None
                 if not clock_rewound:
                     # Pruning can already have aged this voxel past a delayed
                     # observation. Keep that horizon and age only the new
@@ -511,6 +520,11 @@ class VoxelMap:
                 # A repeated timestamp cannot initialize an unweighted feature
                 # or color that disagrees with the unchanged semantic evidence.
                 continue
+            previous_effective = self._stored_timestamp(voxel, 'last_effective_observed_at_sec')
+            voxel['last_effective_observed_at_sec'] = (
+                observation_time if previous_effective is None
+                else max(previous_effective, observation_time))
+            self.last_effective_updates[key] = (float(effective_evidence), mean_probability.copy())
             if is_new_voxel:
                 new_count += 1
             else:

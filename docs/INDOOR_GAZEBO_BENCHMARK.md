@@ -1,6 +1,6 @@
 # Indoor-7 Gazebo benchmark
 
-核对日期：2026-09-29
+核对日期：2026-10-07
 
 本文保存室内方案、静态数据归属和可公开的当前结论。完整启动与操作命令见
 [RUNBOOK.md](RUNBOOK.md)。当前只验收 Gazebo，不涉及真实机器人运动。
@@ -22,6 +22,21 @@
 3. AWS Hospital：最后验证 chair/table/shelf/bed 跨场景泛化。
 
 当前代码和证据只覆盖第一项。Bookstore 和 Hospital 尚未接入，不能在结果表中记为支持。
+
+当前实验假设为静态环境：Small House 中目标家具固定，机器人仍可转向或移动。
+室内 preset 使用不衰减、无未重见 TTL 的历史记忆；其它 preset 不变。静态专项先
+验证目标未动时的短/长不可见空窗与重新可见，不把“椅子被搬走”列入本轮必做范围。
+无目标仍发布错误目标及饱和错误可否纠正，属于静态场景下仍需验证的识别/融合问题。
+固定数组敏感性与真实转头/遮挡输入实验分别记录；未获得实际图像序列不能声称
+完成遮挡实验。规则和定向回归见 [证据预算说明](FUSION_EVIDENCE_BUDGET.md)。
+
+静态发布前确认的有效时间、区域汇总、累计预算、四臂及同实例代理评价见
+[STATIC_CONFIRMATION.md](STATIC_CONFIRMATION.md)。`chair_dining_confirmation_clear` 是预设
+较清晰的东南视角，并非已证明完全无遮挡；`chair_kitchen_confirmation_table_legs` 为
+桌腿视角；`chair_kitchen_confirmation_long_gap` 追加实际移动与 75 sim s 空窗。
+这些 case 保存同帧 RGB/后验、投影和 TF，可在停止后运行离线几何归因。
+原模型原点指标保留，新增视觉包围盒中心和表面指标；二者都不替代严格逐点真值。
+八臂记录、图表及限制见 [2026-10-07 静态确认摘要](results/indoor_static_confirmation_20261007/README.md)。
 
 ## 2. Indoor-7 ontology
 
@@ -155,6 +170,12 @@ model pose，属于模型原点，不是网格几何中心或可见表面。因�
 是不同实验流程，结果分别记录。
 
 ## 8. 下一步验收
+
+10 月 7 日已有 `chair_kitchen_motion_revisit` 的实际移动回看记录与固定输入回放，
+完整本机批次为 `/home/yk/ws/indoor_benchmark_runs/aws_small_house/20261007_motion_revisit/`。
+三次固定发送频率的相同程序均到达并停稳；目标原点误差 .438—.668 m，有真实空窗，
+但未回原位或证明同实例重确认。慢/不衰减的反事实比较仅验证融合、候选与语义接近点，
+不能当成三种策略的导航成功率；慢衰减的在线闭环、实际纠错与搬动物体均未测试。
 
 ### 首轮输入表示对比
 

@@ -25,7 +25,7 @@ from rclpy.node import Node
 from rclpy.parameter import Parameter
 from rclpy.qos import qos_profile_sensor_data
 from rosgraph_msgs.msg import Clock as ClockMessage
-from sensor_msgs.msg import Image, Imu, PointCloud2
+from sensor_msgs.msg import CameraInfo, Image, Imu, PointCloud2
 from std_msgs.msg import Float32, String
 from tf2_msgs.msg import TFMessage
 
@@ -71,7 +71,10 @@ class BenchmarkObserver(Node):
                           'goal_poses': [], 'bridge_events': [], 'counts': {},
                           'control': {}}
         self.last = {}
-        self.poses = {'truth': deque(maxlen=3000), 'estimate': deque(maxlen=3000)}
+        history_size = 20000 if case.get('motion_revisit') else 3000
+        self.poses = {'truth': deque(maxlen=history_size), 'estimate': deque(maxlen=history_size)}
+        self.latest_rgb = None
+        self.output_directory = None
         self.odom_tf_seen = False
         self.urdf_base_is_root = False
         self.capability = None
@@ -111,6 +114,11 @@ class BenchmarkObserver(Node):
             String, '/perception_mode', self._perception_mode, 10)
         self.create_subscription(Log, '/rosout', self._log, 100)
         self.query_publisher = self.create_publisher(String, '/text_query', 10)
+        self.create_subscription(String, '/semantic_confirmation/status', self._confirmation, 10)
+        self.create_subscription(CameraInfo, '/d435i/camera_info', self._camera_info,
+                                 qos_profile_sensor_data)
+        if case.get('motion_revisit'):
+            self.motion_publisher = self.create_publisher(Twist, '/cmd_vel', 10)
         if case.get('mapping_pitch_rad'):
             self.body_pose_publisher = self.create_publisher(Pose, '/body_pose', 10)
         self.navigation = ActionClient(self, NavigateToPose, '/navigate_to_pose')
@@ -146,6 +154,8 @@ class BenchmarkObserver(Node):
         self.clock_wall = time.monotonic()
 
     def _sensor(self, name, message):
+        if name == 'rgb' and self.case.get('motion_revisit'):
+            self.latest_rgb = message
         if name in self.poses:
             value = _pose(message)
             _pose_matrix(value, 'world' if name == 'truth' else 'odom')
@@ -190,6 +200,20 @@ class BenchmarkObserver(Node):
         children = {joint.find('child').get('link') for joint in root.findall('joint')}
         self.urdf_base_is_root = root.find('link[@name="base_link"]') is not None and (
             'base_link' not in children)
+        directory = getattr(self, 'output_directory', None)
+        if directory is not None:
+            (directory / 'robot_description.urdf').write_text(message.data)
+
+    def _camera_info(self, message):
+        self.recording['camera_info'] = {
+            'frame': message.header.frame_id, 'width': message.width, 'height': message.height,
+            'k': list(message.k), 'd': list(message.d),
+            'distortion_model': message.distortion_model}
+
+    def _confirmation(self, message):
+        value = json.loads(message.data)
+        value['observed_sim_sec'] = self.recording.get('sim_time', 0)
+        self.recording.setdefault('confirmation_events', []).append(value)
 
     def _tf_authority_problem(self):
         # Humble's Python callback discards publisher metadata. In this fixed
@@ -467,6 +491,134 @@ class BenchmarkObserver(Node):
             and stop['max_displacement_xy_m'] <= .05)
         return True
 
+    def _motion_checkpoint(self, name, paired):
+        checkpoint = {'name': name, 'sim_sec': self.recording['sim_time'], **paired}
+        if self.latest_rgb is not None and self.output_directory is not None:
+            from PIL import Image as PILImage
+            image = self.latest_rgb
+            rgb = np.frombuffer(image.data, dtype=np.uint8).reshape(image.height, image.step)
+            rgb = rgb[:, :image.width * 3].reshape(image.height, image.width, 3)
+            if image.encoding == 'bgr8':
+                rgb = rgb[:, :, ::-1]
+            directory = self.output_directory / 'views'
+            directory.mkdir(exist_ok=True)
+            PILImage.fromarray(rgb).save(directory / f'{name}.png')
+            checkpoint.update(view=f'views/{name}.png', rgb_stamp=_stamp(image))
+        self.recording['motion_observation']['checkpoints'].append(checkpoint)
+
+    def _motion_step(self):
+        """Drive/turn using FAST-LIO feedback; use GT only for maneuver acceptance."""
+        paired = self._paired_pose()
+        if paired is None:
+            self.motion_publisher.publish(Twist())
+            return False
+        sim = self.recording['sim_time']
+        motion = self.recording.setdefault('motion_observation', {
+            'stage': 'drive', 'stage_start_sim_sec': sim,
+            'start': paired, 'checkpoints': [], 'completed': False,
+        })
+        if not motion['checkpoints']:
+            self._motion_checkpoint('before_motion', paired)
+        start = motion['start']['estimate']
+        yaw = float(Rotation.from_quat(paired['estimate']['orientation']).as_euler('xyz')[2])
+        start_yaw = float(Rotation.from_quat(start['orientation']).as_euler('xyz')[2])
+        angle = math.atan2(math.sin(yaw - start_yaw), math.cos(yaw - start_yaw))
+        displacement = np.asarray(paired['estimate']['position'][:2]) - start['position'][:2]
+        forward = float(displacement @ np.array([math.cos(start_yaw), math.sin(start_yaw)]))
+        settings = self.case['motion_revisit']
+        elapsed = sim - motion['stage_start_sim_sec']
+        stage = motion['stage']
+        command = Twist()
+        following = None
+        if stage == 'drive':
+            if forward >= settings['distance_m']:
+                following = 'drive_stop'
+            else:
+                command.linear.x = .18
+        elif stage == 'drive_stop' and elapsed >= 3:
+            following = 'turn_away'
+        elif stage == 'turn_away':
+            if angle >= settings['turn_rad']:
+                following = 'away_hold'
+            else:
+                command.angular.z = .6
+        elif stage == 'away_hold' and elapsed >= settings['hold_sim_sec']:
+            following = 'turn_back'
+        elif stage == 'turn_back':
+            if abs(angle) <= .08:
+                following = 'return_stop'
+            else:
+                command.angular.z = -.6 if angle > 0 else .6
+        elif stage == 'return_stop' and elapsed >= 5:
+            following = 'complete'
+        self.motion_publisher.publish(command)
+        if stage in ('drive', 'turn_away', 'turn_back') and elapsed > 45:
+            motion['failed_stage'] = stage
+            self.motion_publisher.publish(Twist())
+            return True
+        if following:
+            self._motion_checkpoint(following, paired)
+            motion.update(stage=following, stage_start_sim_sec=sim)
+            print(f'benchmark: actual motion phase: {following}', flush=True)
+            if following == 'complete':
+                truth_start = motion['start']['truth']
+                truth = paired['truth']
+                original_yaw = Rotation.from_quat(truth_start['orientation']).as_euler('xyz')[2]
+                final_yaw = Rotation.from_quat(truth['orientation']).as_euler('xyz')[2]
+                away = next(value for value in motion['checkpoints']
+                            if value['name'] == 'away_hold')
+                away_yaw = Rotation.from_quat(away['truth']['orientation']).as_euler('xyz')[2]
+                turn = abs(math.atan2(
+                    math.sin(away_yaw - original_yaw), math.cos(away_yaw - original_yaw)))
+                restored = abs(math.atan2(
+                    math.sin(final_yaw - original_yaw), math.cos(final_yaw - original_yaw)))
+                distance = math.dist(truth_start['position'][:2], truth['position'][:2])
+                drive_end = next(value for value in motion['checkpoints']
+                                 if value['name'] == 'drive_stop')
+                drive_distance = math.dist(truth_start['position'][:2],
+                                           drive_end['truth']['position'][:2])
+                motion.update(gt_displacement_xy_m=distance, gt_away_turn_rad=turn,
+                              gt_drive_displacement_xy_m=drive_distance,
+                              gt_restored_yaw_error_rad=restored, observed_sim_sec=sim -
+                              motion['checkpoints'][0]['sim_sec'])
+                motion['completed'] = bool(
+                    drive_distance >= settings['distance_m'] * .6
+                    and turn >= settings['turn_rad'] * .8 and restored <= .2)
+                return True
+        return False
+
+    def _observe_motion(self, process, world_from_odom):
+        start = time.monotonic()
+        next_step = start
+        while time.monotonic() - start < self.case['motion_revisit']['timeout_wall_sec']:
+            self.ros_executor.spin_once(timeout_sec=.01)
+            now = time.monotonic()
+            if now < next_step:
+                continue
+            # Sensor callbacks can return immediately. They must not set the
+            # command rate or feed our own command subscription into a busy loop.
+            next_step = now + .05
+            problem = self._live_problem(require_fresh_service_status=False)
+            if process.poll() is not None or problem:
+                self.recording['termination'] = problem or 'simulation_exited_during_motion'
+                break
+            paired = self._paired_pose()
+            if paired is not None:
+                estimate = (world_from_odom @ _pose_matrix(paired['estimate'], 'odom'))[:3, 3]
+                if math.dist(estimate, paired['truth']['position']) > .5:
+                    self.recording['termination'] = 'localization_diverged_during_motion'
+                    break
+            if self._motion_step():
+                self.motion_publisher.publish(Twist())
+                completed = self.recording['motion_observation']['completed']
+                if not completed:
+                    self.recording['termination'] = 'motion_maneuver_not_achieved'
+                return completed
+        else:
+            self.recording['termination'] = 'motion_wall_timeout'
+        self.motion_publisher.publish(Twist())
+        return False
+
     def observe(self, process):
         """Wait for evidence, publish exactly one query, then observe the full case."""
         start = time.monotonic()
@@ -509,6 +661,10 @@ class BenchmarkObserver(Node):
             return
         world_from_odom = _pose_matrix(alignment['truth'], 'world') @ np.linalg.inv(
             _pose_matrix(alignment['estimate'], 'odom'))
+        if self.case.get('motion_revisit'):
+            if not self._observe_motion(process, world_from_odom):
+                return
+            self.destroy_publisher(self.motion_publisher)
         query_start, query_stamp = time.monotonic(), self.recording['sim_time']
         query = self.recording['query']
         query.update(sent=True, stamp=query_stamp, text=self.case['query'])
@@ -531,6 +687,12 @@ class BenchmarkObserver(Node):
                 break
             terminal = next((e['event'] for e in reversed(self.recording['bridge_events'])
                              if e['event'] in ('SUCCEEDED', 'ABORTED', 'CANCELED')), None)
+            confirmation = next((e for e in reversed(
+                self.recording.get('confirmation_events', []))
+                if e['event'] == 'TERMINATED'), None)
+            if (not negative and not self.recording['goal_poses'] and confirmation is not None
+                    and confirmation['state'] in ('unconfirmed', 'input_invalid')):
+                terminal = 'CONFIRMATION_TERMINATED'
             if not negative and terminal is None:
                 if query['observed_sim_sec'] >= self.case['query_timeout_sim_sec']:
                     self.recording['termination'] = 'query_sim_timeout'
@@ -553,6 +715,11 @@ class BenchmarkObserver(Node):
                 break
             if not negative:
                 if terminal is not None:
+                    if terminal == 'CONFIRMATION_TERMINATED':
+                        if not self._stop_complete(paired):
+                            continue
+                        self.recording['termination'] = confirmation['state']
+                        break
                     if terminal != 'SUCCEEDED' or self._stop_complete(paired):
                         self.recording['termination'] = 'nav_terminal'
                         break

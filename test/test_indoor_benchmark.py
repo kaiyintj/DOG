@@ -340,6 +340,14 @@ def test_plan_observation_distinguishes_path_endpoint_from_original_goal():
     assert last['length_xy_m'] == 1.5
 
 
+def test_motion_case_cannot_pass_using_only_navigation_success(successful_recording):
+    case, recording = successful_recording
+    case = {**case, 'motion_revisit': {'distance_m': .4}}
+    assert evaluate_case(case, recording)['reason'] == 'motion_revisit_not_completed'
+    recording['motion_observation'] = {'completed': True}
+    assert evaluate_case(case, recording)['passed'] is True
+
+
 def test_negative_case_needs_full_live_observation_and_query_ack(successful_recording):
     _, recording = successful_recording
     case = {'id': 'unsupported', 'expected': 'no_target_or_goal',

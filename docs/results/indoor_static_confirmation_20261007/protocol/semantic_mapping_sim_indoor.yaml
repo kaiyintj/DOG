@@ -137,8 +137,7 @@ ga_bsvm_node:
     query_fallback_max_attempts: 2
     query_retry_min_interval_sec: 1.0
     # Static pre-navigation review: weak evidence, or old and inconsistent evidence.
-    # Static default preserves usable fresh candidates; quality feedback remains an ablation arm.
-    confirmation_policy: "age"
+    confirmation_policy: "age_quality"
     confirmation_motion_topic: "/cmd_vel"
     confirmation_max_age_sec: 60.0
     confirmation_total_sim_sec: 30.0

@@ -49,6 +49,10 @@ def evaluate_case(case, recording):
     }
     if not recording.get('readiness', {}).get('passed'):
         return result
+    if (case.get('motion_revisit')
+            and not recording.get('motion_observation', {}).get('completed')):
+        result['reason'] = 'motion_revisit_not_completed'
+        return result
     if case['expected'] == 'start_validation':
         passed = (
             recording.get('termination') == 'start_validation_complete'
@@ -200,6 +204,13 @@ def _load_case(manifest_path, case_id):
         pitch, hold = float(case['mapping_pitch_rad']), float(case['mapping_pitch_hold_sim_sec'])
         if not math.isfinite(pitch) or not 0 < pitch <= .3 or not math.isfinite(hold) or hold <= 0:
             raise ValueError('Mapping sweep requires pitch in (0,.3] and a positive hold')
+    if case.get('motion_revisit'):
+        motion = case['motion_revisit']
+        for key in ('distance_m', 'turn_rad', 'hold_sim_sec', 'timeout_wall_sec'):
+            if not math.isfinite(float(motion[key])) or float(motion[key]) <= 0:
+                raise ValueError(f'motion_revisit.{key} must be finite and positive')
+        if motion['distance_m'] > .5 or motion['turn_rad'] > math.pi:
+            raise ValueError('Motion revisit supports a short drive and at most a half turn')
     start_values = [*starts[0]['pose'], starts[0]['spawn_height_m']]
     if len(start_values) != 4 or not all(math.isfinite(float(v)) for v in start_values):
         raise ValueError('Invalid spawn pose')
@@ -274,6 +285,8 @@ def main(argv=None):
     parser.add_argument('--manifest', required=True, type=Path)
     parser.add_argument('--case', required=True)
     parser.add_argument('--output', required=True, type=Path)
+    parser.add_argument('--confirmation-policy', choices=['none', 'always', 'age', 'age_quality'],
+                        default='none')
     parser.add_argument(
         '--fusion-input', choices=['full_posterior', 'hard_mask_confidence'],
         default='full_posterior',
@@ -288,6 +301,7 @@ def main(argv=None):
         'reason': 'preflight_incomplete',
         'case_id': args.case,
         'fusion_input': args.fusion_input,
+        'confirmation_policy': args.confirmation_policy,
     }
     observer = process = None
     exit_code = 2
@@ -336,6 +350,7 @@ def main(argv=None):
         from semantic_mapping.gazebo.observation import BenchmarkObserver
 
         observer = BenchmarkObserver(case)
+        observer.output_directory = output
         observer.require_empty_domain()
         start = case['robot_start']
         command = [
@@ -349,8 +364,11 @@ def main(argv=None):
             f'world_init_x:={start["pose"][0]}', f'world_init_y:={start["pose"][1]}',
             f'world_init_z:={start["spawn_height_m"]}',
             f'world_init_heading:={start["pose"][2]}',
+            f'confirmation_policy:={args.confirmation_policy}',
         ]
         report['command'] = command
+        if case.get('motion_revisit') or 'confirmation' in case['id']:
+            command.append(f'fusion_trace_dir:={output / "fusion_trace"}')
         exit_code = 1
         with (output / 'simulation.log').open('w') as log:
             process = subprocess.Popen(
@@ -359,6 +377,14 @@ def main(argv=None):
             observer.observe(process)
             report['recording'] = observer.recording
             report.update(evaluate_case(case, observer.recording))
+            if observer.recording.get('confirmation_events'):
+                from semantic_mapping.offline.confirmation_evaluation import evaluate_confirmation
+                report['confirmation_evaluation'] = evaluate_confirmation(case, observer.recording)
+            if report.get('metrics', {}).get('nearest_gt_id'):
+                from semantic_mapping.offline.static_geometry import load_target_references
+                reference = load_target_references(case)[report['metrics']['nearest_gt_id']]
+                report['geometry_reference'] = reference.measure(
+                    np.asarray(report['metrics']['target_world_xyz']))
             try:
                 children = psutil.Process(process.pid).children(recursive=True)
                 report['gazebo_commands'] = [
@@ -379,6 +405,9 @@ def main(argv=None):
             report.update(passed=False, reason='owned_process_cleanup_incomplete')
             exit_code = 1
         if observer is not None:
+            if getattr(observer, 'poses', None) is not None:
+                observer.recording['trajectory'] = {
+                    name: list(values) for name, values in observer.poses.items()}
             observer.close()
         (output / 'result.json').write_text(
             json.dumps(report, indent=2, ensure_ascii=False, allow_nan=False) + '\n')

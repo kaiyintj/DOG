@@ -1,6 +1,6 @@
 # 运行手册
 
-核对日期：2026-10-03
+核对日期：2026-10-07
 
 本手册只保存当前可执行流程。能力边界见 [PROJECT_STATUS.md](PROJECT_STATUS.md)，
 室内实验定义和结果见 [INDOOR_GAZEBO_BENCHMARK.md](INDOOR_GAZEBO_BENCHMARK.md)。
@@ -282,6 +282,53 @@ ros2 run semantic_mapping run_indoor_semantic_benchmark \
 结果均保留在 10 月 3 日本机批次中。
 室内 SegFormer 每次成功融合均发布语义/不确定性点云，避免 TF 丢帧下低频抽样造成
 输出过期；实际仿真仍保留输入有效性检查。
+
+当前 Small House 按静态环境运行：室内 `evidence_decay=1.0`、`voxel_ttl_sec=0.0`，
+已经观察到的目标不因看向别处或短时遮挡而按时间遗忘。总证据、地图半径和容量仍有
+上限，传感器过期与控制超时仍照常检查。动态环境不适用该 preset；户外和 Lite3 参数
+保持原样。静态回归可在通用准备后运行：
+
+```bash
+cd "$SEMANTIC_WS/src/semantic_mapping"
+PYTHONDONTWRITEBYTECODE=1 PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 \
+python3 -m pytest -q -p no:cacheprovider test/test_indoor_static_memory.py
+```
+
+它验证固定输入下的静态记忆与纠错，不替代下面的真实 Gazebo 查询、到达和停止验收。
+
+`chair_kitchen_motion_revisit` 在同样低头建图后实际前进约 .4 m、转离约 120°、停留
+45 sim s、转回原方向再查询。命令固定 20 Hz，通过已有主动感知速度链；GT 只验收。
+运行方式与下面相同，只替换 case 和使用新输出目录。该 case 自动保存 `fusion_trace/`
+与 `views/`；完成后可运行 `python3 -m semantic_mapping.offline.replay_fusion_trace <输出目录>`
+比较相同实际输入下的原/慢/不衰减地图。它不执行反事实导航，也不证明同实例确认。
+
+静态确认的定义与冻结口径见 [STATIC_CONFIRMATION.md](STATIC_CONFIRMATION.md)。
+室内交互启动默认 `age`，可用 launch 参数 `confirmation_policy:=none` 选择
+原查询行为。benchmark 的 `--confirmation-policy` 显式选择
+`none/always/age/age_quality`，默认 `none`。当前只覆盖 SegFormer 类别查询发布前的
+确认，不包括 Nav2 失败后自动换候选。GT 不进入预测、候选、确认或策略指令；
+运行器仅将它用于独立验收及无效试验中止，保留既有姿态/定位运行检查。
+
+单终端运行一臂（前提是已按通用准备构建、本地 ADE20K 模型可用，隔离域无其它节点）：
+
+```bash
+export ROS_DOMAIN_ID=228 ROS_LOCALHOST_ONLY=1
+export GAZEBO_MASTER_URI=http://127.0.0.1:11368
+export HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1
+ros2 run semantic_mapping run_indoor_semantic_benchmark \
+  --manifest config/benchmark/small_house_manifest.yaml \
+  --case chair_kitchen_confirmation_long_gap \
+  --confirmation-policy age_quality \
+  --output "$RESULT_ROOT/aws_small_house/${RUN_ID}_static_confirmation/long_gap_age_quality"
+```
+
+替换 policy 并使用不同输出目录即可做四臂；保持其它配置和机器负载相同，所有失败
+都保留。runner 自动执行低头建图、实际移动、75 sim s 空窗、回看、查询及停止，
+按预算退出或流程结束后清理自己启动的仿真。`unconfirmed` 是确认未完成，不算导航
+成功；只有桥接匹配的 `SUCCEEDED` 与 5 sim s GT 停稳同时成立才通过功能链。
+结果目录保留 `result.json`、`fusion_trace/`、`robot_description.urdf` 与日志。
+停止后可运行 `python3 -m semantic_mapping.offline.static_attribution <输出目录>`，
+生成 `attribution.json` 和同帧叠图；只在已登记椅子/桌子视觉几何范围内做代理归因。
 
 `chair_kitchen_mapping_pitch` 在同一厨房起点增加预先定义的低头建图：定位预热后，
 3 sim s 渐变至机身 pitch +0.30 rad、保持 10 sim s、3 sim s 恢复，至少再观察 5 sim s。

@@ -13,6 +13,8 @@ from typing import Any, Callable, Mapping, Optional, Tuple
 import numpy as np
 from scipy.spatial import cKDTree
 
+from semantic_mapping.runtime.candidate_observation import summarize_observations
+
 
 @dataclass(frozen=True)
 class QueryTargetSnapshot:
@@ -341,6 +343,7 @@ class QueryClusterPolicy:
 
 def rank_query_clusters(
     candidates, policy, robot_position=None, query_class_idx=None, query_color=None,
+    map_time_sec=None, recent_observation_sec=60.0,
 ):
     """Cluster semantic evidence before applying color and return ranked instances."""
     diagnostics = {
@@ -493,7 +496,14 @@ def rank_query_clusters(
             'voxel_count': len(cluster),
             'evidence': total_evidence,
             'utility': utility,
+            'voxel_keys': tuple(item['key'] for item in cluster),
+            'class_support_mean': float(np.average(
+                [item['class_probability'] for item in cluster], weights=evidence_weights)),
+            'uncertainty_mean': float(np.average(
+                [item.get('uncertainty', 1.0) for item in cluster], weights=evidence_weights)),
         }
+        cluster_result.update(summarize_observations(
+            cluster, evidence_weights, map_time_sec, recent_observation_sec))
         ranked_clusters.append(cluster_result)
     ranked_clusters.sort(key=lambda item: item['utility'], reverse=True)
     return ranked_clusters, diagnostics

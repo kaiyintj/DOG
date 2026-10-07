@@ -253,6 +253,7 @@ def test_small_house_manifest_targets_are_exact_sdf_model_origins():
     for target in manifest['targets']:
         model = world.find(f"model[@name='{target['gazebo_model']}']")
         assert model is not None
+        assert model.findtext('static', 'false').strip() == 'true'
         pose = model.find('pose')
         assert pose.get('frame', '') == ''
         assert [float(value) for value in pose.text.split()] == target['pose']
